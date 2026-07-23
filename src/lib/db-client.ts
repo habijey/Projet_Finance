@@ -464,3 +464,85 @@ export async function resetData(): Promise<{ settings: Settings; categories: Cat
   await db.clear("settings")
   return seedDB()
 }
+
+// ─── Full Backup (JSON) ────────────────────────────
+
+export interface BackupData {
+  version: number
+  exportedAt: string
+  settings: Settings
+  categories: Category[]
+  expenses: Expense[]
+  savingsGoals: SavingsGoal[]
+}
+
+export async function exportFullBackup(): Promise<string> {
+  const db = await getDB()
+  const settings = (await db.get("settings", "main"))!
+  const categories = await db.getAll("categories")
+  const expenses = await db.getAll("expenses")
+  const savingsGoals = await db.getAll("savingsGoals")
+
+  const backup: BackupData = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    settings,
+    categories,
+    expenses,
+    savingsGoals,
+  }
+
+  return JSON.stringify(backup, null, 2)
+}
+
+export async function importFullBackup(jsonStr: string): Promise<{
+  settings: Settings
+  categories: Category[]
+  expenses: Expense[]
+  savingsGoals: SavingsGoal[]
+}> {
+  const backup: BackupData = JSON.parse(jsonStr)
+
+  if (!backup.version || !backup.settings || !backup.categories) {
+    throw new Error("Fichier de sauvegarde invalide")
+  }
+
+  const db = await getDB()
+
+  // Clear everything
+  await db.clear("expenses")
+  await db.clear("savingsGoals")
+  await db.clear("categories")
+  await db.clear("settings")
+
+  // Restore settings
+  await db.put("settings", backup.settings)
+
+  // Restore categories (strip category from expenses to avoid FK issues)
+  const expenses: Expense[] = (backup.expenses || []).map((e) => ({
+    ...e,
+    category: undefined,
+  }))
+  const categories: Category[] = backup.categories || []
+
+  // Restore savings goals
+  const savingsGoals: SavingsGoal[] = backup.savingsGoals || []
+
+  // Write everything in a transaction
+  const tx = db.transaction(["settings", "categories", "expenses", "savingsGoals"], "readwrite")
+
+  await tx.objectStore("settings").put(backup.settings)
+  for (const cat of categories) {
+    await tx.objectStore("categories").put(cat)
+  }
+  for (const exp of expenses) {
+    await tx.objectStore("expenses").put(exp)
+  }
+  for (const goal of savingsGoals) {
+    await tx.objectStore("savingsGoals").put(goal)
+  }
+
+  await tx.done
+
+  return { settings: backup.settings, categories, expenses, savingsGoals }
+}

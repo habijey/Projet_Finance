@@ -109,6 +109,8 @@ import {
   deleteSavingsGoal as dbDeleteSavingsGoal,
   importCSV as dbImportCSV,
   exportCSV as dbExportCSV,
+  exportFullBackup as dbExportFullBackup,
+  importFullBackup as dbImportFullBackup,
   resetData as dbResetData,
   type Settings as DBSettings,
   type Category as DBCategory,
@@ -1324,6 +1326,41 @@ export default function Home() {
     toast.success("Export terminé")
   }
 
+  const handleFullBackup = async () => {
+    const json = await dbExportFullBackup()
+    const blob = new Blob([json], { type: "application/json;charset=utf-8" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    const date = new Date().toISOString().slice(0, 10)
+    a.href = url
+    a.download = `mesdepenses_backup_${date}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success("Sauvegarde complète téléchargée")
+  }
+
+  const handleFullRestore = async (file: File) => {
+    try {
+      const json = await file.text()
+      const data = await dbImportFullBackup(json)
+      // Update all state
+      setSettings(data.settings)
+      setCategories(data.categories)
+      setSavingsGoals(data.savingsGoals)
+      // Rebuild expenses with categories attached
+      const catMap = new Map(data.categories.map((c) => [c.id, c]))
+      const expsWithCat = data.expenses.map((e) => ({
+        ...e,
+        category: e.categoryId ? catMap.get(e.categoryId) || null : null,
+      }))
+      setAllMonthExpenses(expsWithCat.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+      setExpenses(expsWithCat)
+      toast.success(`Restauré : ${data.expenses.length} dépenses, ${data.savingsGoals.length} objectifs`)
+    } catch (e) {
+      toast.error("Erreur lors de la restauration : fichier invalide")
+    }
+  }
+
   const renderSettings = () => (
     <div className="space-y-6">
       <div>
@@ -1486,6 +1523,43 @@ export default function Home() {
               Ajouter
             </Button>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Sync between devices */}
+      <Card className="border-primary/30 bg-primary/5">
+        <CardHeader>
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Upload className="h-4 w-4 text-primary" />
+            <span className="text-primary font-semibold">Synchroniser entre appareils</span>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Exportez toutes vos données sur un appareil, puis importez-les sur l'autre (iPhone ↔ PC).
+          </p>
+          <Button className="w-full justify-start" onClick={handleFullBackup}>
+            <Download className="h-4 w-4 mr-2" />
+            Sauvegarder toutes mes données (JSON)
+          </Button>
+          <label className="block w-full">
+            <input
+              type="file"
+              accept=".json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) handleFullRestore(file)
+                e.target.value = ""
+              }}
+            />
+            <Button variant="outline" className="w-full justify-start cursor-pointer" asChild>
+              <span>
+                <Upload className="h-4 w-4 mr-2" />
+                Restaurer depuis un fichier (JSON)
+              </span>
+            </Button>
+          </label>
         </CardContent>
       </Card>
 
