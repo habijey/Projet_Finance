@@ -1,0 +1,52 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Settings {
+  id             String   @id @default(cuid())
+  monthlySalary  Float    @default(0)
+  monthlySavings Float    @default(0)
+  currency       String   @default("EUR")
+  updatedAt      DateTime @updatedAt
+}
+
+model Category {
+  id          String     @id @default(cuid())
+  name        String
+  icon        String     @default("Circle")
+  color       String     @default("#10b981")
+  budgetLimit Float      @default(0)
+  isDefault   Boolean    @default(false)
+  sortOrder   Int        @default(0)
+  expenses    Expense[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+model Expense {
+  id          String    @id @default(cuid())
+  amount      Float
+  description String
+  date        DateTime  @default(now())
+  categoryId  String?
+  category    Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  note        String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model SavingsGoal {
+  id            String    @id @default(cuid())
+  name          String
+  targetAmount  Float
+  currentAmount Float     @default(0)
+  deadline      DateTime?
+  color         String    @default("#10b981")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+}
