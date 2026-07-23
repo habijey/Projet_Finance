@@ -11,20 +11,33 @@ Work Log:
 - Created ThemeProvider with next-themes (dark mode toggle)
 - Built Zustand client store for tab navigation and filters
 - Updated CSS with vibrant emerald/amber/rose color palette + dark theme
-- Constructed full SPA in page.tsx with 5 views:
-  - Dashboard: summary cards, budget alerts, donut chart, bar chart, recent expenses
-  - Add Expense: manual form + CSV import
-  - History: filters (month, category, search, sort), expense list with edit/delete
-  - Savings Goals: goal cards with progress bars, add funds dialog
-  - Settings: salary/savings config, dark mode toggle, category management, data export
+- Constructed full SPA in page.tsx with 5 views
 - Fixed React 19 strict lint rules (setState in effects, refs during render)
 - Verified with Agent Browser: all tabs work, forms functional, dark mode toggle works, mobile responsive
 
+---
+Task ID: 2
+Agent: Super Z (main)
+Task: Migrate all data storage from server API to local IndexedDB
+
+Work Log:
+- Installed `idb` package (IndexedDB promise wrapper)
+- Created `/src/lib/db-client.ts` with complete IndexedDB layer:
+  - Database schema: settings, categories, expenses, savingsGoals stores
+  - CRUD operations for all entities
+  - CSV import/export functions
+  - Seed function for default categories
+  - Reset data function
+  - Proper indexing (by-date, by-category, by-name)
+- Removed all `fetch("/api/...")` calls from page.tsx
+- Replaced with direct IndexedDB function calls (dbAddExpense, dbGetExpenses, etc.)
+- Verified with Agent Browser: expense saved to IndexedDB, displayed on dashboard
+- Confirmed zero API calls in dev log (only GET / 200 for HTML)
+- Lint passes cleanly
+
 Stage Summary:
-- Complete expense tracker app deployed on localhost:3000
-- All 8 API routes responding correctly (200 status)
-- 10 default categories seeded (Alimentation, Transport, Logement, etc.)
-- Dark mode toggle functional in settings
-- Responsive layout: sidebar on desktop, bottom tabs on mobile
-- CSV import and export both supported
-- Screenshots saved to /home/z/my-project/download/
+- Data is now 100% local (IndexedDB) — works even when published/deployed
+- No server-side data dependency
+- All features preserved: add/delete/edit expenses, categories, savings goals
+- CSV import and export both work client-side
+- IndexedDB persists data across page reloads and browser sessions

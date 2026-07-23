@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useRef } from "react"
+import { useEffect, useState } from "react"
 import { useTheme } from "next-themes"
 import { useAppStore, type TabId } from "@/lib/store"
 import { useIsMobile } from "@/hooks/use-mobile"
@@ -91,43 +91,36 @@ import {
   FolderDown,
 } from "lucide-react"
 
-// ─── Types ───────────────────────────────────────────────
+// ─── IndexedDB client ───────────────────────────────────
+import {
+  seedDB,
+  getSettings as dbGetSettings,
+  updateSettings as dbUpdateSettings,
+  getCategories as dbGetCategories,
+  addCategory as dbAddCategory,
+  deleteCategory as dbDeleteCategory,
+  getExpenses as dbGetExpenses,
+  addExpense as dbAddExpense,
+  updateExpense as dbUpdateExpense,
+  deleteExpense as dbDeleteExpense,
+  getSavingsGoals as dbGetSavingsGoals,
+  addSavingsGoal as dbAddSavingsGoal,
+  updateSavingsGoal as dbUpdateSavingsGoal,
+  deleteSavingsGoal as dbDeleteSavingsGoal,
+  importCSV as dbImportCSV,
+  exportCSV as dbExportCSV,
+  resetData as dbResetData,
+  type Settings as DBSettings,
+  type Category as DBCategory,
+  type Expense as DBExpense,
+  type SavingsGoal as DBSavingsGoal,
+} from "@/lib/db-client"
 
-interface Settings {
-  id: string
-  monthlySalary: number
-  monthlySavings: number
-  currency: string
-}
-
-interface Category {
-  id: string
-  name: string
-  icon: string
-  color: string
-  budgetLimit: number
-  isDefault: boolean
-  sortOrder: number
-}
-
-interface Expense {
-  id: string
-  amount: number
-  description: string
-  date: string
-  categoryId: string | null
-  category: Category | null
-  note: string | null
-}
-
-interface SavingsGoal {
-  id: string
-  name: string
-  targetAmount: number
-  currentAmount: number
-  deadline: string | null
-  color: string
-}
+// Local type aliases for convenience
+type Settings = DBSettings
+type Category = DBCategory
+type Expense = DBExpense
+type SavingsGoal = DBSavingsGoal
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -179,64 +172,42 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [mounted] = useState(true)
 
-  // ─── Seed + Fetch all data on first load ──────────
+  // ─── Load all data from IndexedDB on first load ───
   useEffect(() => {
     let cancelled = false
     async function init() {
       try {
-        const res = await fetch("/api/seed")
-        const data = await res.json()
-        if (!cancelled) {
-          if (data.settings) setSettings(data.settings)
-          if (data.categories) setCategories(data.categories)
-        }
+        const { settings: s, categories: c } = await seedDB()
+        if (cancelled) return
+        setSettings(s)
+        setCategories(c)
+        const goals = await dbGetSavingsGoals()
+        if (cancelled) return
+        setSavingsGoals(goals)
+        const monthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+        if (cancelled) return
+        setAllMonthExpenses(monthExpenses)
       } catch (e) {
-        console.error("Seed error", e)
+        console.error("Init error", e)
+      } finally {
+        if (!cancelled) setLoading(false)
       }
-      if (cancelled) return
-      fetch("/api/settings")
-        .then((r) => r.json())
-        .then((s) => { if (!cancelled) { setSettings(s); setLoading(false) } })
-        .catch(() => { if (!cancelled) setLoading(false) })
-      fetch("/api/categories")
-        .then((r) => r.json())
-        .then((c) => { if (!cancelled) setCategories(c) })
-        .catch(console.error)
-      fetch("/api/savings-goals")
-        .then((r) => r.json())
-        .then((g) => { if (!cancelled) setSavingsGoals(g) })
-        .catch(console.error)
     }
     init()
     return () => { cancelled = true }
   }, [])
 
-  // ─── Fetch expenses for current month (dashboard) ─
-  useEffect(() => {
-    let cancelled = false
-    const month = getCurrentMonthStr()
-    fetch(`/api/expenses?month=${month}&sortBy=date&sortOrder=desc`)
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) setAllMonthExpenses(data) })
-      .catch(console.error)
-    return () => { cancelled = true }
-  }, [])
-
-  // ─── Fetch filtered expenses (history tab) ────────
+  // ─── Refresh filtered expenses (history tab) ──────
   useEffect(() => {
     if (activeTab !== "history") return
     let cancelled = false
-    const params = new URLSearchParams()
-    params.set("month", filters.month)
-    params.set("sortBy", filters.sortBy)
-    params.set("sortOrder", filters.sortOrder)
-    if (filters.categoryId) params.set("categoryId", filters.categoryId)
-    if (filters.search) params.set("search", filters.search)
-
-    fetch(`/api/expenses?${params}`)
-      .then((r) => r.json())
-      .then((data) => { if (!cancelled) setExpenses(data) })
-      .catch(console.error)
+    dbGetExpenses({
+      month: filters.month,
+      categoryId: filters.categoryId || undefined,
+      search: filters.search || undefined,
+      sortBy: filters.sortBy,
+      sortOrder: filters.sortOrder,
+    }).then((data) => { if (!cancelled) setExpenses(data) }).catch(console.error)
     return () => { cancelled = true }
   }, [activeTab, filters])
 
@@ -275,12 +246,7 @@ export default function Home() {
     categoryId: string | null
     note: string | null
   }) => {
-    const res = await fetch("/api/expenses", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    })
-    const expense = await res.json()
+    const expense = await dbAddExpense(data)
     setAllMonthExpenses((prev) => [expense, ...prev])
     if (activeTab === "history") {
       setExpenses((prev) => [expense, ...prev])
@@ -289,36 +255,26 @@ export default function Home() {
   }
 
   const deleteExpense = async (id: string) => {
-    await fetch(`/api/expenses/${id}`, { method: "DELETE" })
+    await dbDeleteExpense(id)
     setAllMonthExpenses((prev) => prev.filter((e) => e.id !== id))
     setExpenses((prev) => prev.filter((e) => e.id !== id))
     toast.success("Dépense supprimée")
   }
 
-  const updateSettings = async (data: Partial<Settings>) => {
-    const res = await fetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    })
-    const s = await res.json()
+  const updateSettings = async (data: Partial<DBSettings>) => {
+    const s = await dbUpdateSettings(data)
     setSettings(s)
     toast.success("Paramètres mis à jour")
   }
 
   const addCategory = async (data: { name: string; icon: string; color: string; budgetLimit: number }) => {
-    const res = await fetch("/api/categories", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    })
-    const cat = await res.json()
+    const cat = await dbAddCategory(data)
     setCategories((prev) => [...prev, cat])
     toast.success(`Catégorie "${cat.name}" créée`)
   }
 
   const deleteCategory = async (id: string) => {
-    await fetch(`/api/categories/${id}`, { method: "DELETE" })
+    await dbDeleteCategory(id)
     setCategories((prev) => prev.filter((c) => c.id !== id))
     toast.success("Catégorie supprimée")
   }
@@ -330,29 +286,19 @@ export default function Home() {
     deadline: string | null
     color: string
   }) => {
-    const res = await fetch("/api/savings-goals", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    })
-    const goal = await res.json()
+    const goal = await dbAddSavingsGoal(data)
     setSavingsGoals((prev) => [goal, ...prev])
     toast.success(`Objectif "${goal.name}" créé`)
   }
 
-  const updateSavingsGoal = async (id: string, data: Partial<SavingsGoal>) => {
-    const res = await fetch(`/api/savings-goals/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(data),
-    })
-    const goal = await res.json()
+  const updateSavingsGoal = async (id: string, data: Partial<DBSavingsGoal>) => {
+    const goal = await dbUpdateSavingsGoal(id, data)
     setSavingsGoals((prev) => prev.map((g) => (g.id === id ? goal : g)))
     toast.success("Objectif mis à jour")
   }
 
   const deleteSavingsGoal = async (id: string) => {
-    await fetch(`/api/savings-goals/${id}`, { method: "DELETE" })
+    await dbDeleteSavingsGoal(id)
     setSavingsGoals((prev) => prev.filter((g) => g.id !== id))
     toast.success("Objectif supprimé")
   }
@@ -364,21 +310,15 @@ export default function Home() {
   }
 
   const handleCSVImport = async (file: File) => {
-    const formData = new FormData()
-    formData.append("file", file)
-    const res = await fetch("/api/import-csv", {
-      method: "POST",
-      body: formData,
-    })
-    const result = await res.json()
+    const text = await file.text()
+    const result = await dbImportCSV(text)
     if (result.imported > 0) {
       toast.success(`${result.imported} dépenses importées`)
-      // Refresh expenses
-      const month = getCurrentMonthStr()
-      const exps = await fetch(`/api/expenses?month=${month}&sortBy=date&sortOrder=desc`).then((r) => r.json())
-      setAllMonthExpenses(exps)
+      // Refresh expenses from IndexedDB
+      const monthExps = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+      setAllMonthExpenses(monthExps)
       if (activeTab === "history") {
-        const fExps = await fetch(`/api/expenses?month=${filters.month}&sortBy=${filters.sortBy}&sortOrder=${filters.sortOrder}`).then((r) => r.json())
+        const fExps = await dbGetExpenses({ month: filters.month, sortBy: filters.sortBy, sortOrder: filters.sortOrder })
         setExpenses(fExps)
       }
     }
@@ -1056,18 +996,13 @@ export default function Home() {
             <Button
               onClick={async () => {
                 if (!editExpense) return
-                const res = await fetch(`/api/expenses/${editExpense.id}`, {
-                  method: "PUT",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    amount: parseFloat(editForm.amount),
-                    description: editForm.description,
-                    date: editForm.date,
-                    categoryId: editForm.categoryId || null,
-                    note: editForm.note || null,
-                  }),
+                const updated = await dbUpdateExpense(editExpense.id, {
+                  amount: parseFloat(editForm.amount),
+                  description: editForm.description,
+                  date: editForm.date,
+                  categoryId: editForm.categoryId || null,
+                  note: editForm.note || null,
                 })
-                const updated = await res.json()
                 setAllMonthExpenses((prev) =>
                   prev.map((e) => (e.id === updated.id ? updated : e))
                 )
@@ -1378,12 +1313,7 @@ export default function Home() {
   }, [settings, settingsInitialized])
 
   const handleExport = async () => {
-    const allExpenses = await fetch("/api/expenses?sortBy=date&sortOrder=desc").then((r) => r.json())
-    const header = "Date;Description;Montant;Catégorie;Note"
-    const rows = allExpenses.map((e: Expense) =>
-      `${new Date(e.date).toLocaleDateString("fr-FR")};${e.description};${e.amount.toFixed(2)};${e.category?.name || ""};${e.note || ""}`
-    )
-    const csv = [header, ...rows].join("\n")
+    const csv = await dbExportCSV()
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
     const url = URL.createObjectURL(blob)
     const a = document.createElement("a")
@@ -1576,15 +1506,12 @@ export default function Home() {
             variant="outline"
             className="w-full justify-start"
             onClick={async () => {
-              await fetch("/api/seed")
-              const [s, c, g] = await Promise.all([
-                fetch("/api/settings").then((r) => r.json()),
-                fetch("/api/categories").then((r) => r.json()),
-                fetch("/api/savings-goals").then((r) => r.json()),
-              ])
+              const { settings: s, categories: c } = await dbResetData()
               setSettings(s)
               setCategories(c)
-              setSavingsGoals(g)
+              setSavingsGoals([])
+              setAllMonthExpenses([])
+              setExpenses([])
               toast.success("Données par défaut réinitialisées")
             }}
           >
