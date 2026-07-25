@@ -1,0 +1,1729 @@
+     1→"use client"
+     2→
+     3→import { useEffect, useState } from "react"
+     4→import { useTheme } from "next-themes"
+     5→import { useAppStore, type TabId } from "@/lib/store"
+     6→import { useIsMobile } from "@/hooks/use-mobile"
+     7→import { motion, AnimatePresence } from "framer-motion"
+     8→import { toast } from "sonner"
+     9→
+    10→// shadcn/ui
+    11→import { Button } from "@/components/ui/button"
+    12→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+    13→import { Input } from "@/components/ui/input"
+    14→import { Label } from "@/components/ui/label"
+    15→import { Textarea } from "@/components/ui/textarea"
+    16→import { Badge } from "@/components/ui/badge"
+    17→import { Progress } from "@/components/ui/progress"
+    18→import { Switch } from "@/components/ui/switch"
+    19→import { Separator } from "@/components/ui/separator"
+    20→import {
+    21→  Select,
+    22→  SelectContent,
+    23→  SelectItem,
+    24→  SelectTrigger,
+    25→  SelectValue,
+    26→} from "@/components/ui/select"
+    27→import {
+    28→  Dialog,
+    29→  DialogContent,
+    30→  DialogHeader,
+    31→  DialogTitle,
+    32→  DialogFooter,
+    33→  DialogDescription,
+    34→} from "@/components/ui/dialog"
+    35→import {
+    36→  AlertDialog,
+    37→  AlertDialogAction,
+    38→  AlertDialogCancel,
+    39→  AlertDialogContent,
+    40→  AlertDialogDescription,
+    41→  AlertDialogFooter,
+    42→  AlertDialogHeader,
+    43→  AlertDialogTitle,
+    44→} from "@/components/ui/alert-dialog"
+    45→import { Skeleton } from "@/components/ui/skeleton"
+    46→import { ScrollArea } from "@/components/ui/scroll-area"
+    47→import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+    48→
+    49→// Charts
+    50→import {
+    51→  PieChart,
+    52→  Pie,
+    53→  Cell,
+    54→  ResponsiveContainer,
+    55→  Tooltip,
+    56→  BarChart,
+    57→  Bar,
+    58→  XAxis,
+    59→  YAxis,
+    60→  CartesianGrid,
+    61→} from "recharts"
+    62→
+    63→// Lucide icons
+    64→import {
+    65→  LayoutDashboard,
+    66→  PlusCircle,
+    67→  History,
+    68→  PiggyBank,
+    69→  Settings,
+    70→  Upload,
+    71→  TrendingUp,
+    72→  TrendingDown,
+    73→  Wallet,
+    74→  Target,
+    75→  Trash2,
+    76→  Edit2,
+    77→  ChevronUp,
+    78→  ChevronDown,
+    79→  Calendar,
+    80→  Search,
+    81→  Filter,
+    82→  DollarSign,
+    83→  AlertTriangle,
+    84→  CheckCircle2,
+    85→  X,
+    86→  ArrowUpDown,
+    87→  Moon,
+    88→  Sun,
+    89→  Download,
+    90→  RotateCcw,
+    91→  FolderDown,
+    92→} from "lucide-react"
+    93→
+    94→// ─── IndexedDB client ───────────────────────────────────
+    95→import {
+    96→  seedDB,
+    97→  getSettings as dbGetSettings,
+    98→  updateSettings as dbUpdateSettings,
+    99→  getCategories as dbGetCategories,
+   100→  addCategory as dbAddCategory,
+   101→  deleteCategory as dbDeleteCategory,
+   102→  getExpenses as dbGetExpenses,
+   103→  addExpense as dbAddExpense,
+   104→  updateExpense as dbUpdateExpense,
+   105→  deleteExpense as dbDeleteExpense,
+   106→  getSavingsGoals as dbGetSavingsGoals,
+   107→  addSavingsGoal as dbAddSavingsGoal,
+   108→  updateSavingsGoal as dbUpdateSavingsGoal,
+   109→  deleteSavingsGoal as dbDeleteSavingsGoal,
+   110→  importCSV as dbImportCSV,
+   111→  exportCSV as dbExportCSV,
+   112→  exportFullBackup as dbExportFullBackup,
+   113→  importFullBackup as dbImportFullBackup,
+   114→  resetData as dbResetData,
+   115→  type Settings as DBSettings,
+   116→  type Category as DBCategory,
+   117→  type Expense as DBExpense,
+   118→  type SavingsGoal as DBSavingsGoal,
+   119→} from "@/lib/db-client"
+   120→
+   121→// Local type aliases for convenience
+   122→type Settings = DBSettings
+   123→type Category = DBCategory
+   124→type Expense = DBExpense
+   125→type SavingsGoal = DBSavingsGoal
+   126→
+   127→// ─── Helpers ─────────────────────────────────────────────
+   128→
+   129→function formatMoney(n: number): string {
+   130→  return new Intl.NumberFormat("fr-FR", {
+   131→    style: "currency",
+   132→    currency: "EUR",
+   133→  }).format(n)
+   134→}
+   135→
+   136→function formatDate(d: string): string {
+   137→  return new Intl.DateTimeFormat("fr-FR", {
+   138→    day: "numeric",
+   139→    month: "long",
+   140→    year: "numeric",
+   141→  }).format(new Date(d))
+   142→}
+   143→
+   144→function formatDateShort(d: string): string {
+   145→  return new Intl.DateTimeFormat("fr-FR", {
+   146→    day: "numeric",
+   147→    month: "short",
+   148→  }).format(new Date(d))
+   149→}
+   150→
+   151→function getCurrentMonthStr(): string {
+   152→  return new Date().toISOString().slice(0, 7)
+   153→}
+   154→
+   155→const PIE_COLORS = [
+   156→  "#10b981", "#f59e0b", "#8b5cf6", "#ec4899",
+   157→  "#06b6d4", "#f97316", "#84cc16", "#14b8a6",
+   158→  "#eab308", "#64748b", "#e11d48", "#7c3aed",
+   159→]
+   160→
+   161→// ─── Main Component ──────────────────────────────────────
+   162→
+   163→export default function Home() {
+   164→  const { activeTab, setActiveTab, filters, setFilters } = useAppStore()
+   165→  const isMobile = useIsMobile()
+   166→  const { theme, setTheme } = useTheme()
+   167→
+   168→  // Data states
+   169→  const [settings, setSettings] = useState<Settings | null>(null)
+   170→  const [categories, setCategories] = useState<Category[]>([])
+   171→  const [expenses, setExpenses] = useState<Expense[]>([])
+   172→  const [allMonthExpenses, setAllMonthExpenses] = useState<Expense[]>([])
+   173→  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([])
+   174→  const [loading, setLoading] = useState(true)
+   175→  const [mounted] = useState(true)
+   176→
+   177→  // ─── Load all data from IndexedDB on first load ───
+   178→  useEffect(() => {
+   179→    let cancelled = false
+   180→    async function init() {
+   181→      try {
+   182→        const { settings: s, categories: c } = await seedDB()
+   183→        if (cancelled) return
+   184→        setSettings(s)
+   185→        setCategories(c)
+   186→        const goals = await dbGetSavingsGoals()
+   187→        if (cancelled) return
+   188→        setSavingsGoals(goals)
+   189→        const monthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+   190→        if (cancelled) return
+   191→        setAllMonthExpenses(monthExpenses)
+   192→      } catch (e) {
+   193→        console.error("Init error", e)
+   194→      } finally {
+   195→        if (!cancelled) setLoading(false)
+   196→      }
+   197→    }
+   198→    init()
+   199→    return () => { cancelled = true }
+   200→  }, [])
+   201→
+   202→  // ─── Refresh filtered expenses (history tab) ──────
+   203→  useEffect(() => {
+   204→    if (activeTab !== "history") return
+   205→    let cancelled = false
+   206→    dbGetExpenses({
+   207→      month: filters.month,
+   208→      categoryId: filters.categoryId || undefined,
+   209→      search: filters.search || undefined,
+   210→      sortBy: filters.sortBy,
+   211→      sortOrder: filters.sortOrder,
+   212→    }).then((data) => { if (!cancelled) setExpenses(data) }).catch(console.error)
+   213→    return () => { cancelled = true }
+   214→  }, [activeTab, filters])
+   215→
+   216→  // ─── Derived stats ────────────────────────────────
+   217→  const totalMonthExpenses = allMonthExpenses.reduce((s, e) => s + e.amount, 0)
+   218→  const remaining = (settings?.monthlySalary || 0) - (settings?.monthlySavings || 0) - totalMonthExpenses
+   219→
+   220→  // Budget alerts
+   221→  const budgetAlerts = categories
+   222→    .filter((c) => c.budgetLimit > 0)
+   223→    .map((c) => {
+   224→      const spent = allMonthExpenses
+   225→        .filter((e) => e.categoryId === c.id)
+   226→        .reduce((s, e) => s + e.amount, 0)
+   227→      const pct = (spent / c.budgetLimit) * 100
+   228→      return { ...c, spent, pct }
+   229→    })
+   230→    .filter((c) => c.pct >= 80)
+   231→    .sort((a, b) => b.pct - a.pct)
+   232→
+   233→  // Category breakdown for chart
+   234→  const categoryBreakdown = categories
+   235→    .map((c) => {
+   236→      const total = allMonthExpenses
+   237→        .filter((e) => e.categoryId === c.id)
+   238→        .reduce((s, e) => s + e.amount, 0)
+   239→      return total > 0 ? { name: c.name, value: total, color: c.color } : null
+   240→    })
+   241→    .filter(Boolean) as { name: string; value: number; color: string }[]
+   242→
+   243→  // ─── Actions ──────────────────────────────────────
+   244→  const addExpense = async (data: {
+   245→    amount: number
+   246→    description: string
+   247→    date: string
+   248→    categoryId: string | null
+   249→    note: string | null
+   250→  }) => {
+   251→    const expense = await dbAddExpense(data)
+   252→    setAllMonthExpenses((prev) => [expense, ...prev])
+   253→    if (activeTab === "history") {
+   254→      setExpenses((prev) => [expense, ...prev])
+   255→    }
+   256→    toast.success(`Dépense de ${formatMoney(data.amount)} ajoutée`)
+   257→  }
+   258→
+   259→  const deleteExpense = async (id: string) => {
+   260→    await dbDeleteExpense(id)
+   261→    setAllMonthExpenses((prev) => prev.filter((e) => e.id !== id))
+   262→    setExpenses((prev) => prev.filter((e) => e.id !== id))
+   263→    toast.success("Dépense supprimée")
+   264→  }
+   265→
+   266→  const updateSettings = async (data: Partial<DBSettings>) => {
+   267→    const s = await dbUpdateSettings(data)
+   268→    setSettings(s)
+   269→    toast.success("Paramètres mis à jour")
+   270→  }
+   271→
+   272→  const addCategory = async (data: { name: string; icon: string; color: string; budgetLimit: number }) => {
+   273→    const cat = await dbAddCategory(data)
+   274→    setCategories((prev) => [...prev, cat])
+   275→    toast.success(`Catégorie "${cat.name}" créée`)
+   276→  }
+   277→
+   278→  const deleteCategory = async (id: string) => {
+   279→    await dbDeleteCategory(id)
+   280→    setCategories((prev) => prev.filter((c) => c.id !== id))
+   281→    toast.success("Catégorie supprimée")
+   282→  }
+   283→
+   284→  const addSavingsGoal = async (data: {
+   285→    name: string
+   286→    targetAmount: number
+   287→    currentAmount: number
+   288→    deadline: string | null
+   289→    color: string
+   290→  }) => {
+   291→    const goal = await dbAddSavingsGoal(data)
+   292→    setSavingsGoals((prev) => [goal, ...prev])
+   293→    toast.success(`Objectif "${goal.name}" créé`)
+   294→  }
+   295→
+   296→  const updateSavingsGoal = async (id: string, data: Partial<DBSavingsGoal>) => {
+   297→    const goal = await dbUpdateSavingsGoal(id, data)
+   298→    setSavingsGoals((prev) => prev.map((g) => (g.id === id ? goal : g)))
+   299→    toast.success("Objectif mis à jour")
+   300→  }
+   301→
+   302→  const deleteSavingsGoal = async (id: string) => {
+   303→    await dbDeleteSavingsGoal(id)
+   304→    setSavingsGoals((prev) => prev.filter((g) => g.id !== id))
+   305→    toast.success("Objectif supprimé")
+   306→  }
+   307→
+   308→  const addFundsToGoal = async (id: string, amount: number) => {
+   309→    const goal = savingsGoals.find((g) => g.id === id)
+   310→    if (!goal) return
+   311→    await updateSavingsGoal(id, { currentAmount: goal.currentAmount + amount })
+   312→  }
+   313→
+   314→  const handleCSVImport = async (file: File) => {
+   315→    const text = await file.text()
+   316→    const result = await dbImportCSV(text)
+   317→    if (result.imported > 0) {
+   318→      toast.success(`${result.imported} dépenses importées`)
+   319→      // Refresh expenses from IndexedDB
+   320→      const monthExps = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+   321→      setAllMonthExpenses(monthExps)
+   322→      if (activeTab === "history") {
+   323→        const fExps = await dbGetExpenses({ month: filters.month, sortBy: filters.sortBy, sortOrder: filters.sortOrder })
+   324→        setExpenses(fExps)
+   325→      }
+   326→    }
+   327→    if (result.errors?.length > 0) {
+   328→      toast.warning(`${result.errors.length} erreurs lors de l'import`)
+   329→    }
+   330→  }
+   331→
+   332→  // ─── Tab definitions ──────────────────────────────
+   333→  const tabs: { id: TabId; label: string; icon: React.ReactNode }[] = [
+   334→    { id: "dashboard", label: "Tableau", icon: <LayoutDashboard className="h-5 w-5" /> },
+   335→    { id: "add", label: "Ajouter", icon: <PlusCircle className="h-5 w-5" /> },
+   336→    { id: "history", label: "Historique", icon: <History className="h-5 w-5" /> },
+   337→    { id: "savings", label: "Épargne", icon: <PiggyBank className="h-5 w-5" /> },
+   338→    { id: "settings", label: "Paramètres", icon: <Settings className="h-5 w-5" /> },
+   339→  ]
+   340→
+   341→  // ─── Render views ────────────────────────────────
+   342→  const renderDashboard = () => (
+   343→    <div className="space-y-6">
+   344→      <div>
+   345→        <h1 className="text-2xl font-bold">Bonjour 👋</h1>
+   346→        <p className="text-muted-foreground text-sm mt-1">
+   347→          Voici le résumé de vos finances ce mois-ci
+   348→        </p>
+   349→      </div>
+   350→
+   351→      {/* Summary Cards */}
+   352→      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+   353→        <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
+   354→          <CardContent className="p-4">
+   355→            <div className="flex items-center gap-2 mb-2">
+   356→              <Wallet className="h-4 w-4 text-emerald-500" />
+   357→              <span className="text-xs text-muted-foreground font-medium">Salaire</span>
+   358→            </div>
+   359→            <p className="text-xl font-bold">{formatMoney(settings?.monthlySalary || 0)}</p>
+   360→          </CardContent>
+   361→        </Card>
+   362→        <Card className="bg-gradient-to-br from-amber-500/10 to-amber-500/5 border-amber-500/20">
+   363→          <CardContent className="p-4">
+   364→            <div className="flex items-center gap-2 mb-2">
+   365→              <Target className="h-4 w-4 text-amber-500" />
+   366→              <span className="text-xs text-muted-foreground font-medium">Épargne</span>
+   367→            </div>
+   368→            <p className="text-xl font-bold">{formatMoney(settings?.monthlySavings || 0)}</p>
+   369→          </CardContent>
+   370→        </Card>
+   371→        <Card className="bg-gradient-to-br from-rose-500/10 to-rose-500/5 border-rose-500/20">
+   372→          <CardContent className="p-4">
+   373→            <div className="flex items-center gap-2 mb-2">
+   374→              <TrendingDown className="h-4 w-4 text-rose-500" />
+   375→              <span className="text-xs text-muted-foreground font-medium">Dépenses</span>
+   376→            </div>
+   377→            <p className="text-xl font-bold">{formatMoney(totalMonthExpenses)}</p>
+   378→          </CardContent>
+   379→        </Card>
+   380→        <Card className={`bg-gradient-to-br ${remaining >= 0 ? "from-emerald-500/10 to-emerald-500/5 border-emerald-500/20" : "from-rose-500/10 to-rose-500/5 border-rose-500/20"}`}>
+   381→          <CardContent className="p-4">
+   382→            <div className="flex items-center gap-2 mb-2">
+   383→              {remaining >= 0 ? (
+   384→                <TrendingUp className="h-4 w-4 text-emerald-500" />
+   385→              ) : (
+   386→                <AlertTriangle className="h-4 w-4 text-rose-500" />
+   387→              )}
+   388→              <span className="text-xs text-muted-foreground font-medium">Restant</span>
+   389→            </div>
+   390→            <p className={`text-xl font-bold ${remaining >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400"}`}>
+   391→              {formatMoney(remaining)}
+   392→            </p>
+   393→          </CardContent>
+   394→        </Card>
+   395→      </div>
+   396→
+   397→      {/* Budget Alerts */}
+   398→      {budgetAlerts.length > 0 && (
+   399→        <Card className="border-amber-500/30">
+   400→          <CardHeader className="pb-3">
+   401→            <CardTitle className="text-sm font-medium flex items-center gap-2">
+   402→              <AlertTriangle className="h-4 w-4 text-amber-500" />
+   403→              Alertes budget
+   404→            </CardTitle>
+   405→          </CardHeader>
+   406→          <CardContent className="space-y-2">
+   407→            {budgetAlerts.map((alert) => (
+   408→              <div key={alert.id} className="flex items-center justify-between text-sm">
+   409→                <div className="flex items-center gap-2">
+   410→                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: alert.color }} />
+   411→                  <span>{alert.name}</span>
+   412→                </div>
+   413→                <div className="flex items-center gap-2">
+   414→                  <Progress value={Math.min(alert.pct, 100)} className="w-20 h-2" />
+   415→                  <span className={alert.pct >= 100 ? "text-rose-500 font-semibold" : "text-amber-600"}>
+   416→                    {alert.pct.toFixed(0)}%
+   417→                  </span>
+   418→                </div>
+   419→              </div>
+   420→            ))}
+   421→          </CardContent>
+   422→        </Card>
+   423→      )}
+   424→
+   425→      {/* Charts Row */}
+   426→      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+   427→        {/* Donut Chart */}
+   428→        <Card>
+   429→          <CardHeader>
+   430→            <CardTitle className="text-sm font-medium">Répartition par catégorie</CardTitle>
+   431→          </CardHeader>
+   432→          <CardContent>
+   433→            {categoryBreakdown.length > 0 ? (
+   434→              <div className="h-[250px]">
+   435→                <ResponsiveContainer width="100%" height="100%">
+   436→                  <PieChart>
+   437→                    <Pie
+   438→                      data={categoryBreakdown}
+   439→                      cx="50%"
+   440→                      cy="50%"
+   441→                      innerRadius={60}
+   442→                      outerRadius={100}
+   443→                      paddingAngle={3}
+   444→                      dataKey="value"
+   445→                    >
+   446→                      {categoryBreakdown.map((entry, index) => (
+   447→                        <Cell key={index} fill={entry.color} />
+   448→                      ))}
+   449→                    </Pie>
+   450→                    <Tooltip
+   451→                      formatter={(value: number) => formatMoney(value)}
+   452→                      contentStyle={{
+   453→                        borderRadius: "8px",
+   454→                        border: "none",
+   455→                        boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+   456→                      }}
+   457→                    />
+   458→                  </PieChart>
+   459→                </ResponsiveContainer>
+   460→              </div>
+   461→            ) : (
+   462→              <div className="h-[250px] flex items-center justify-center text-muted-foreground text-sm">
+   463→                Aucune dépense ce mois-ci
+   464→              </div>
+   465→            )}
+   466→          </CardContent>
+   467→        </Card>
+   468→
+   469→        {/* Category Bars */}
+   470→        <Card>
+   471→          <CardHeader>
+   472→            <CardTitle className="text-sm font-medium">Top catégories</CardTitle>
+   473→          </CardHeader>
+   474→          <CardContent>
+   475→            {categoryBreakdown.length > 0 ? (
+   476→              <div className="h-[250px]">
+   477→                <ResponsiveContainer width="100%" height="100%">
+   478→                  <BarChart data={categoryBreakdown.slice(0, 6).sort((a, b) => b.value - a.value)} layout="vertical">
+   479→                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+   480→                    <XAxis type="number" tickFormatter={(v) => `${v}€`} />
+   481→                    <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 12 }} />
+   482→                    <Tooltip formatter={(value: number) => formatMoney(value)} />
+   483→                    <Bar dataKey="value" radius={[0, 6, 6, 0]}>
+   484→                      {categoryBreakdown.slice(0, 6).map((entry, index) => (
+   485→                        <Cell key={index} fill={entry.color} />
+   486→                      ))}
+   487→                    </Bar>
+   488→                  </BarChart>
+   489→                </ResponsiveContainer>
+   490→              </div>
+   491→            ) : (
+   492→              <div className="h-[250px] flex items-center justify-center text-muted-foreground text-sm">
+   493→                Aucune donnée à afficher
+   494→              </div>
+   495→            )}
+   496→          </CardContent>
+   497→        </Card>
+   498→      </div>
+   499→
+   500→      {/* Recent Expenses */}
+   501→      <Card>
+   502→        <CardHeader>
+   503→          <CardTitle className="text-sm font-medium">Dernières dépenses</CardTitle>
+   504→        </CardHeader>
+   505→        <CardContent>
+   506→          {allMonthExpenses.length > 0 ? (
+   507→            <div className="space-y-3">
+   508→              {allMonthExpenses.slice(0, 5).map((expense) => (
+   509→                <div key={expense.id} className="flex items-center justify-between">
+   510→                  <div className="flex items-center gap-3">
+   511→                    <div
+   512→                      className="w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0"
+   513→                      style={{ backgroundColor: expense.category?.color || "#64748b" }}
+   514→                    >
+   515→                      {expense.description.charAt(0).toUpperCase()}
+   516→                    </div>
+   517→                    <div>
+   518→                      <p className="text-sm font-medium">{expense.description}</p>
+   519→                      <p className="text-xs text-muted-foreground">
+   520→                        {expense.category?.name || "Non catégorisé"} · {formatDateShort(expense.date)}
+   521→                      </p>
+   522→                    </div>
+   523→                  </div>
+   524→                  <p className="text-sm font-semibold text-rose-500">-{formatMoney(expense.amount)}</p>
+   525→                </div>
+   526→              ))}
+   527→            </div>
+   528→          ) : (
+   529→            <p className="text-sm text-muted-foreground text-center py-8">
+   530→              Aucune dépense enregistrée ce mois-ci
+   531→            </p>
+   532→          )}
+   533→        </CardContent>
+   534→      </Card>
+   535→    </div>
+   536→  )
+   537→
+   538→  // ─── Add Expense View ───────────────────────────────
+   539→  const [newExpense, setNewExpense] = useState({
+   540→    amount: "",
+   541→    description: "",
+   542→    date: new Date().toISOString().slice(0, 10),
+   543→    categoryId: "",
+   544→    note: "",
+   545→  })
+   546→
+   547→  const renderAddExpense = () => (
+   548→    <div className="space-y-6">
+   549→      <div>
+   550→        <h1 className="text-2xl font-bold">Ajouter une dépense</h1>
+   551→        <p className="text-muted-foreground text-sm mt-1">
+   552→          Saisissez manuellement ou importez un fichier CSV
+   553→        </p>
+   554→      </div>
+   555→
+   556→      {/* Manual Form */}
+   557→      <Card>
+   558→        <CardHeader>
+   559→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+   560→            <Edit2 className="h-4 w-4" />
+   561→            Saisie manuelle
+   562→          </CardTitle>
+   563→        </CardHeader>
+   564→        <CardContent className="space-y-4">
+   565→          <div className="space-y-2">
+   566→            <Label htmlFor="amount">Montant (€)</Label>
+   567→            <Input
+   568→              id="amount"
+   569→              type="number"
+   570→              step="0.01"
+   571→              min="0"
+   572→              placeholder="0,00"
+   573→              value={newExpense.amount}
+   574→              onChange={(e) => setNewExpense({ ...newExpense, amount: e.target.value })}
+   575→              className="text-2xl font-bold h-14 text-center"
+   576→            />
+   577→          </div>
+   578→          <div className="space-y-2">
+   579→            <Label htmlFor="description">Description</Label>
+   580→            <Input
+   581→              id="description"
+   582→              placeholder="Ex: Courses Carrefour"
+   583→              value={newExpense.description}
+   584→              onChange={(e) => setNewExpense({ ...newExpense, description: e.target.value })}
+   585→            />
+   586→          </div>
+   587→          <div className="grid grid-cols-2 gap-4">
+   588→            <div className="space-y-2">
+   589→              <Label>Catégorie</Label>
+   590→              <Select
+   591→                value={newExpense.categoryId}
+   592→                onValueChange={(v) => setNewExpense({ ...newExpense, categoryId: v })}
+   593→              >
+   594→                <SelectTrigger>
+   595→                  <SelectValue placeholder="Choisir..." />
+   596→                </SelectTrigger>
+   597→                <SelectContent>
+   598→                  {categories.map((c) => (
+   599→                    <SelectItem key={c.id} value={c.id}>
+   600→                      <div className="flex items-center gap-2">
+   601→                        <div className="w-3 h-3 rounded-full" style={{ backgroundColor: c.color }} />
+   602→                        {c.name}
+   603→                      </div>
+   604→                    </SelectItem>
+   605→                  ))}
+   606→                </SelectContent>
+   607→              </Select>
+   608→            </div>
+   609→            <div className="space-y-2">
+   610→              <Label htmlFor="date">Date</Label>
+   611→              <Input
+   612→                id="date"
+   613→                type="date"
+   614→                value={newExpense.date}
+   615→                onChange={(e) => setNewExpense({ ...newExpense, date: e.target.value })}
+   616→              />
+   617→            </div>
+   618→          </div>
+   619→          <div className="space-y-2">
+   620→            <Label htmlFor="note">Note (optionnel)</Label>
+   621→            <Textarea
+   622→              id="note"
+   623→              placeholder="Détails supplémentaires..."
+   624→              value={newExpense.note}
+   625→              onChange={(e) => setNewExpense({ ...newExpense, note: e.target.value })}
+   626→              rows={2}
+   627→            />
+   628→          </div>
+   629→          <Button
+   630→            className="w-full h-12 text-base font-semibold"
+   631→            onClick={() => {
+   632→              if (!newExpense.amount || !newExpense.description) {
+   633→                toast.error("Montant et description requis")
+   634→                return
+   635→              }
+   636→              addExpense({
+   637→                amount: parseFloat(newExpense.amount),
+   638→                description: newExpense.description,
+   639→                date: newExpense.date,
+   640→                categoryId: newExpense.categoryId || null,
+   641→                note: newExpense.note || null,
+   642→              })
+   643→              setNewExpense({
+   644→                amount: "",
+   645→                description: "",
+   646→                date: new Date().toISOString().slice(0, 10),
+   647→                categoryId: "",
+   648→                note: "",
+   649→              })
+   650→            }}
+   651→          >
+   652→            <PlusCircle className="h-5 w-5 mr-2" />
+   653→            Ajouter la dépense
+   654→          </Button>
+   655→        </CardContent>
+   656→      </Card>
+   657→
+   658→      {/* CSV Import */}
+   659→      <Card>
+   660→        <CardHeader>
+   661→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+   662→            <Upload className="h-4 w-4" />
+   663→            Import CSV bancaire
+   664→          </CardTitle>
+   665→        </CardHeader>
+   666→        <CardContent>
+   667→          <div className="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors">
+   668→            <FolderDown className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
+   669→            <p className="text-sm font-medium mb-1">Glissez votre fichier CSV ici</p>
+   670→            <p className="text-xs text-muted-foreground mb-4">
+   671→              Colonnes attendues : Date; Description; Montant; Catégorie (optionnel)
+   672→            </p>
+   673→            <label>
+   674→              <input
+   675→                type="file"
+   676→                accept=".csv,.txt"
+   677→                className="hidden"
+   678→                onChange={(e) => {
+   679→                  const file = e.target.files?.[0]
+   680→                  if (file) handleCSVImport(file)
+   681→                }}
+   682→              />
+   683→              <Button variant="outline" className="cursor-pointer" asChild>
+   684→                <span>
+   685→                  <Upload className="h-4 w-4 mr-2" />
+   686→                  Parcourir les fichiers
+   687→                </span>
+   688→              </Button>
+   689→            </label>
+   690→          </div>
+   691→        </CardContent>
+   692→      </Card>
+   693→    </div>
+   694→  )
+   695→
+   696→  // ─── History View ─────────────────────────────────
+   697→  const [deleteId, setDeleteId] = useState<string | null>(null)
+   698→  const [editExpense, setEditExpense] = useState<Expense | null>(null)
+   699→  const [editForm, setEditForm] = useState({
+   700→    amount: "",
+   701→    description: "",
+   702→    date: "",
+   703→    categoryId: "",
+   704→    note: "",
+   705→  })
+   706→
+   707→  const filteredTotal = expenses.reduce((s, e) => s + e.amount, 0)
+   708→  const filteredAvg = expenses.length > 0 ? filteredTotal / expenses.length : 0
+   709→
+   710→  const renderHistory = () => (
+   711→    <div className="space-y-4">
+   712→      <div>
+   713→        <h1 className="text-2xl font-bold">Historique</h1>
+   714→        <p className="text-muted-foreground text-sm mt-1">
+   715→          Consultez et filtrez toutes vos dépenses
+   716→        </p>
+   717→      </div>
+   718→
+   719→      {/* Filters */}
+   720→      <Card>
+   721→        <CardContent className="p-4 space-y-3">
+   722→          <div className="flex flex-wrap gap-3">
+   723→            <div className="flex-1 min-w-[140px]">
+   724→              <Label className="text-xs text-muted-foreground">Mois</Label>
+   725→              <Input
+   726→                type="month"
+   727→                value={filters.month}
+   728→                onChange={(e) => setFilters({ month: e.target.value })}
+   729→              />
+   730→            </div>
+   731→            <div className="flex-1 min-w-[140px]">
+   732→              <Label className="text-xs text-muted-foreground">Catégorie</Label>
+   733→              <Select
+   734→                value={filters.categoryId || "all"}
+   735→                onValueChange={(v) =>
+   736→                  setFilters({ categoryId: v === "all" ? null : v })
+   737→                }
+   738→              >
+   739→                <SelectTrigger>
+   740→                  <SelectValue />
+   741→                </SelectTrigger>
+   742→                <SelectContent>
+   743→                  <SelectItem value="all">Toutes</SelectItem>
+   744→                  {categories.map((c) => (
+   745→                    <SelectItem key={c.id} value={c.id}>
+   746→                      <div className="flex items-center gap-2">
+   747→                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
+   748→                        {c.name}
+   749→                      </div>
+   750→                    </SelectItem>
+   751→                  ))}
+   752→                </SelectContent>
+   753→              </Select>
+   754→            </div>
+   755→            <div className="flex-1 min-w-[140px]">
+   756→              <Label className="text-xs text-muted-foreground">Rechercher</Label>
+   757→              <div className="relative">
+   758→                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+   759→                <Input
+   760→                  placeholder="Description..."
+   761→                  value={filters.search}
+   762→                  onChange={(e) => setFilters({ search: e.target.value })}
+   763→                  className="pl-9"
+   764→                />
+   765→              </div>
+   766→            </div>
+   767→          </div>
+   768→          <div className="flex items-center gap-2">
+   769→            <Button
+   770→              variant="outline"
+   771→              size="sm"
+   772→              onClick={() =>
+   773→                setFilters({
+   774→                  sortBy: filters.sortBy === "date" ? "amount" : "date",
+   775→                })
+   776→              }
+   777→            >
+   778→              <ArrowUpDown className="h-3.5 w-3.5 mr-1" />
+   779→              {filters.sortBy === "date" ? "Trier par montant" : "Trier par date"}
+   780→            </Button>
+   781→            <Button
+   782→              variant="outline"
+   783→              size="sm"
+   784→              onClick={() =>
+   785→                setFilters({
+   786→                  sortOrder: filters.sortOrder === "desc" ? "asc" : "desc",
+   787→                })
+   788→              }
+   789→            >
+   790→              {filters.sortOrder === "desc" ? (
+   791→                <ChevronDown className="h-3.5 w-3.5 mr-1" />
+   792→              ) : (
+   793→                <ChevronUp className="h-3.5 w-3.5 mr-1" />
+   794→              )}
+   795→              {filters.sortOrder === "desc" ? "Récent" : "Ancien"}
+   796→            </Button>
+   797→            {(filters.categoryId || filters.search) && (
+   798→              <Button
+   799→                variant="ghost"
+   800→                size="sm"
+   801→                onClick={() => setFilters({ categoryId: null, search: "" })}
+   802→              >
+   803→                <X className="h-3.5 w-3.5 mr-1" />
+   804→                Réinitialiser
+   805→              </Button>
+   806→            )}
+   807→          </div>
+   808→        </CardContent>
+   809→      </Card>
+   810→
+   811→      {/* Summary */}
+   812→      <div className="grid grid-cols-3 gap-3">
+   813→        <Card className="p-3 text-center">
+   814→          <p className="text-xs text-muted-foreground">Total</p>
+   815→          <p className="text-lg font-bold text-rose-500">{formatMoney(filteredTotal)}</p>
+   816→        </Card>
+   817→        <Card className="p-3 text-center">
+   818→          <p className="text-xs text-muted-foreground">Moyenne</p>
+   819→          <p className="text-lg font-bold">{formatMoney(filteredAvg)}</p>
+   820→        </Card>
+   821→        <Card className="p-3 text-center">
+   822→          <p className="text-xs text-muted-foreground">Nb dépenses</p>
+   823→          <p className="text-lg font-bold">{expenses.length}</p>
+   824→        </Card>
+   825→      </div>
+   826→
+   827→      {/* Expense List */}
+   828→      <Card>
+   829→        <CardContent className="p-0">
+   830→          {expenses.length > 0 ? (
+   831→            <ScrollArea className="max-h-[500px]">
+   832→              <div className="divide-y">
+   833→                {expenses.map((expense) => (
+   834→                  <div
+   835→                    key={expense.id}
+   836→                    className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+   837→                  >
+   838→                    <div className="flex items-center gap-3 min-w-0">
+   839→                      <div
+   840→                        className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold text-white shrink-0"
+   841→                        style={{
+   842→                          backgroundColor: expense.category?.color || "#64748b",
+   843→                        }}
+   844→                      >
+   845→                        {expense.description.charAt(0).toUpperCase()}
+   846→                      </div>
+   847→                      <div className="min-w-0">
+   848→                        <p className="text-sm font-medium truncate">{expense.description}</p>
+   849→                        <p className="text-xs text-muted-foreground">
+   850→                          {expense.category?.name || "Non catégorisé"} · {formatDate(expense.date)}
+   851→                        </p>
+   852→                      </div>
+   853→                    </div>
+   854→                    <div className="flex items-center gap-2 shrink-0">
+   855→                      <p className="text-sm font-semibold text-rose-500 min-w-[70px] text-right">
+   856→                        -{formatMoney(expense.amount)}
+   857→                      </p>
+   858→                      <Button
+   859→                        variant="ghost"
+   860→                        size="icon"
+   861→                        className="h-8 w-8"
+   862→                        onClick={() => {
+   863→                          setEditExpense(expense)
+   864→                          setEditForm({
+   865→                            amount: String(expense.amount),
+   866→                            description: expense.description,
+   867→                            date: expense.date.slice(0, 10),
+   868→                            categoryId: expense.categoryId || "",
+   869→                            note: expense.note || "",
+   870→                          })
+   871→                        }}
+   872→                      >
+   873→                        <Edit2 className="h-3.5 w-3.5" />
+   874→                      </Button>
+   875→                      <Button
+   876→                        variant="ghost"
+   877→                        size="icon"
+   878→                        className="h-8 w-8 text-rose-500 hover:text-rose-600"
+   879→                        onClick={() => setDeleteId(expense.id)}
+   880→                      >
+   881→                        <Trash2 className="h-3.5 w-3.5" />
+   882→                      </Button>
+   883→                    </div>
+   884→                  </div>
+   885→                ))}
+   886→              </div>
+   887→            </ScrollArea>
+   888→          ) : (
+   889→            <div className="py-12 text-center text-muted-foreground text-sm">
+   890→              Aucune dépense trouvée pour ces filtres
+   891→            </div>
+   892→          )}
+   893→        </CardContent>
+   894→      </Card>
+   895→
+   896→      {/* Delete Confirmation */}
+   897→      <AlertDialog open={!!deleteId} onOpenChange={() => setDeleteId(null)}>
+   898→        <AlertDialogContent>
+   899→          <AlertDialogHeader>
+   900→            <AlertDialogTitle>Supprimer cette dépense ?</AlertDialogTitle>
+   901→            <AlertDialogDescription>
+   902→              Cette action est irréversible.
+   903→            </AlertDialogDescription>
+   904→          </AlertDialogHeader>
+   905→          <AlertDialogFooter>
+   906→            <AlertDialogCancel>Annuler</AlertDialogCancel>
+   907→            <AlertDialogAction
+   908→              className="bg-rose-500 hover:bg-rose-600"
+   909→              onClick={() => {
+   910→                if (deleteId) deleteExpense(deleteId)
+   911→                setDeleteId(null)
+   912→              }}
+   913→            >
+   914→              Supprimer
+   915→            </AlertDialogAction>
+   916→          </AlertDialogFooter>
+   917→        </AlertDialogContent>
+   918→      </AlertDialog>
+   919→
+   920→      {/* Edit Dialog */}
+   921→      <Dialog open={!!editExpense} onOpenChange={() => setEditExpense(null)}>
+   922→        <DialogContent>
+   923→          <DialogHeader>
+   924→            <DialogTitle>Modifier la dépense</DialogTitle>
+   925→            <DialogDescription>Modifiez les détails de votre dépense.</DialogDescription>
+   926→          </DialogHeader>
+   927→          <div className="space-y-4">
+   928→            <div className="space-y-2">
+   929→              <Label>Montant (€)</Label>
+   930→              <Input
+   931→                type="number"
+   932→                step="0.01"
+   933→                value={editForm.amount}
+   934→                onChange={(e) =>
+   935→                  setEditForm({ ...editForm, amount: e.target.value })
+   936→                }
+   937→              />
+   938→            </div>
+   939→            <div className="space-y-2">
+   940→              <Label>Description</Label>
+   941→              <Input
+   942→                value={editForm.description}
+   943→                onChange={(e) =>
+   944→                  setEditForm({ ...editForm, description: e.target.value })
+   945→                }
+   946→              />
+   947→            </div>
+   948→            <div className="grid grid-cols-2 gap-4">
+   949→              <div className="space-y-2">
+   950→                <Label>Catégorie</Label>
+   951→                <Select
+   952→                  value={editForm.categoryId}
+   953→                  onValueChange={(v) =>
+   954→                    setEditForm({ ...editForm, categoryId: v })
+   955→                  }
+   956→                >
+   957→                  <SelectTrigger>
+   958→                    <SelectValue placeholder="Choisir..." />
+   959→                  </SelectTrigger>
+   960→                  <SelectContent>
+   961→                    {categories.map((c) => (
+   962→                      <SelectItem key={c.id} value={c.id}>
+   963→                        <div className="flex items-center gap-2">
+   964→                          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
+   965→                          {c.name}
+   966→                        </div>
+   967→                      </SelectItem>
+   968→                    ))}
+   969→                  </SelectContent>
+   970→                </Select>
+   971→              </div>
+   972→              <div className="space-y-2">
+   973→                <Label>Date</Label>
+   974→                <Input
+   975→                  type="date"
+   976→                  value={editForm.date}
+   977→                  onChange={(e) =>
+   978→                    setEditForm({ ...editForm, date: e.target.value })
+   979→                  }
+   980→                />
+   981→              </div>
+   982→            </div>
+   983→            <div className="space-y-2">
+   984→              <Label>Note</Label>
+   985→              <Textarea
+   986→                value={editForm.note}
+   987→                onChange={(e) =>
+   988→                  setEditForm({ ...editForm, note: e.target.value })
+   989→                }
+   990→                rows={2}
+   991→              />
+   992→            </div>
+   993→          </div>
+   994→          <DialogFooter>
+   995→            <Button variant="outline" onClick={() => setEditExpense(null)}>
+   996→              Annuler
+   997→            </Button>
+   998→            <Button
+   999→              onClick={async () => {
+  1000→                if (!editExpense) return
+  1001→                const updated = await dbUpdateExpense(editExpense.id, {
+  1002→                  amount: parseFloat(editForm.amount),
+  1003→                  description: editForm.description,
+  1004→                  date: editForm.date,
+  1005→                  categoryId: editForm.categoryId || null,
+  1006→                  note: editForm.note || null,
+  1007→                })
+  1008→                setAllMonthExpenses((prev) =>
+  1009→                  prev.map((e) => (e.id === updated.id ? updated : e))
+  1010→                )
+  1011→                setExpenses((prev) =>
+  1012→                  prev.map((e) => (e.id === updated.id ? updated : e))
+  1013→                )
+  1014→                setEditExpense(null)
+  1015→                toast.success("Dépense modifiée")
+  1016→              }}
+  1017→            >
+  1018→              Enregistrer
+  1019→            </Button>
+  1020→          </DialogFooter>
+  1021→        </DialogContent>
+  1022→      </Dialog>
+  1023→    </div>
+  1024→  )
+  1025→
+  1026→  // ─── Savings Goals View ──────────────────────────
+  1027→  const [newGoal, setNewGoal] = useState({
+  1028→    name: "",
+  1029→    targetAmount: "",
+  1030→    currentAmount: "0",
+  1031→    deadline: "",
+  1032→    color: "#10b981",
+  1033→  })
+  1034→  const [showGoalForm, setShowGoalForm] = useState(false)
+  1035→  const [addFundsGoalId, setAddFundsGoalId] = useState<string | null>(null)
+  1036→  const [addFundsAmount, setAddFundsAmount] = useState("")
+  1037→  const [deleteGoalId, setDeleteGoalId] = useState<string | null>(null)
+  1038→
+  1039→  const totalSaved = savingsGoals.reduce((s, g) => s + g.currentAmount, 0)
+  1040→  const totalTarget = savingsGoals.reduce((s, g) => s + g.targetAmount, 0)
+  1041→
+  1042→  const renderSavings = () => (
+  1043→    <div className="space-y-6">
+  1044→      <div className="flex items-center justify-between">
+  1045→        <div>
+  1046→          <h1 className="text-2xl font-bold">Objectifs d'épargne</h1>
+  1047→          <p className="text-muted-foreground text-sm mt-1">
+  1048→            Suivez vos objectifs d'épargne
+  1049→          </p>
+  1050→        </div>
+  1051→        <Button size="sm" onClick={() => setShowGoalForm(true)}>
+  1052→          <PlusCircle className="h-4 w-4 mr-1" />
+  1053→          Nouveau
+  1054→        </Button>
+  1055→      </div>
+  1056→
+  1057→      {/* Summary */}
+  1058→      <div className="grid grid-cols-2 gap-3">
+  1059→        <Card className="p-4 text-center bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
+  1060→          <p className="text-xs text-muted-foreground mb-1">Total épargné</p>
+  1061→          <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{formatMoney(totalSaved)}</p>
+  1062→        </Card>
+  1063→        <Card className="p-4 text-center bg-gradient-to-br from-amber-500/10 to-amber-500/5 border-amber-500/20">
+  1064→          <p className="text-xs text-muted-foreground mb-1">Objectif total</p>
+  1065→          <p className="text-xl font-bold text-amber-600 dark:text-amber-400">{formatMoney(totalTarget)}</p>
+  1066→        </Card>
+  1067→      </div>
+  1068→
+  1069→      {/* Goal Cards */}
+  1070→      {savingsGoals.length > 0 ? (
+  1071→        <div className="space-y-4">
+  1072→          {savingsGoals.map((goal) => {
+  1073→            const pct = goal.targetAmount > 0 ? (goal.currentAmount / goal.targetAmount) * 100 : 0
+  1074→            const remaining = goal.targetAmount - goal.currentAmount
+  1075→            return (
+  1076→              <Card key={goal.id}>
+  1077→                <CardContent className="p-4 space-y-3">
+  1078→                  <div className="flex items-center justify-between">
+  1079→                    <div className="flex items-center gap-2">
+  1080→                      <div className="w-4 h-4 rounded-full" style={{ backgroundColor: goal.color }} />
+  1081→                      <h3 className="font-semibold">{goal.name}</h3>
+  1082→                    </div>
+  1083→                    <div className="flex items-center gap-1">
+  1084→                      <Button
+  1085→                        variant="ghost"
+  1086→                        size="icon"
+  1087→                        className="h-8 w-8"
+  1088→                        onClick={() => setAddFundsGoalId(goal.id)}
+  1089→                      >
+  1090→                        <DollarSign className="h-3.5 w-3.5" />
+  1091→                      </Button>
+  1092→                      <Button
+  1093→                        variant="ghost"
+  1094→                        size="icon"
+  1095→                        className="h-8 w-8 text-rose-500 hover:text-rose-600"
+  1096→                        onClick={() => setDeleteGoalId(goal.id)}
+  1097→                      >
+  1098→                        <Trash2 className="h-3.5 w-3.5" />
+  1099→                      </Button>
+  1100→                    </div>
+  1101→                  </div>
+  1102→                  <div>
+  1103→                    <div className="flex justify-between text-sm mb-1">
+  1104→                      <span className="text-muted-foreground">{formatMoney(goal.currentAmount)}</span>
+  1105→                      <span className="font-medium">{formatMoney(goal.targetAmount)}</span>
+  1106→                    </div>
+  1107→                    <Progress value={Math.min(pct, 100)} className="h-3" />
+  1108→                    <div className="flex justify-between text-xs mt-1">
+  1109→                      <span className="text-muted-foreground">{pct.toFixed(1)}% atteint</span>
+  1110→                      <span className="text-muted-foreground">Reste: {formatMoney(Math.max(0, remaining))}</span>
+  1111→                    </div>
+  1112→                  </div>
+  1113→                  {goal.deadline && (
+  1114→                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+  1115→                      <Calendar className="h-3.5 w-3.5" />
+  1116→                      Échéance: {formatDate(goal.deadline)}
+  1117→                    </div>
+  1118→                  )}
+  1119→                </CardContent>
+  1120→              </Card>
+  1121→            )
+  1122→          })}
+  1123→        </div>
+  1124→      ) : (
+  1125→        <Card className="p-8 text-center">
+  1126→          <PiggyBank className="h-12 w-12 mx-auto mb-3 text-muted-foreground/50" />
+  1127→          <p className="text-muted-foreground text-sm">
+  1128→            Créez votre premier objectif d'épargne pour commencer
+  1129→          </p>
+  1130→        </Card>
+  1131→      )}
+  1132→
+  1133→      {/* New Goal Form */}
+  1134→      <Dialog open={showGoalForm} onOpenChange={setShowGoalForm}>
+  1135→        <DialogContent>
+  1136→          <DialogHeader>
+  1137→            <DialogTitle>Nouvel objectif d'épargne</DialogTitle>
+  1138→            <DialogDescription>Définissez un objectif à atteindre.</DialogDescription>
+  1139→          </DialogHeader>
+  1140→          <div className="space-y-4">
+  1141→            <div className="space-y-2">
+  1142→              <Label>Nom</Label>
+  1143→              <Input
+  1144→                placeholder="Ex: Vacances d'été"
+  1145→                value={newGoal.name}
+  1146→                onChange={(e) => setNewGoal({ ...newGoal, name: e.target.value })}
+  1147→              />
+  1148→            </div>
+  1149→            <div className="grid grid-cols-2 gap-4">
+  1150→              <div className="space-y-2">
+  1151→                <Label>Montant cible (€)</Label>
+  1152→                <Input
+  1153→                  type="number"
+  1154→                  placeholder="0"
+  1155→                  value={newGoal.targetAmount}
+  1156→                  onChange={(e) =>
+  1157→                    setNewGoal({ ...newGoal, targetAmount: e.target.value })
+  1158→                  }
+  1159→                />
+  1160→              </div>
+  1161→              <div className="space-y-2">
+  1162→                <Label>Déjà épargné (€)</Label>
+  1163→                <Input
+  1164→                  type="number"
+  1165→                  placeholder="0"
+  1166→                  value={newGoal.currentAmount}
+  1167→                  onChange={(e) =>
+  1168→                    setNewGoal({ ...newGoal, currentAmount: e.target.value })
+  1169→                  }
+  1170→                />
+  1171→              </div>
+  1172→            </div>
+  1173→            <div className="grid grid-cols-2 gap-4">
+  1174→              <div className="space-y-2">
+  1175→                <Label>Date limite (optionnel)</Label>
+  1176→                <Input
+  1177→                  type="date"
+  1178→                  value={newGoal.deadline}
+  1179→                  onChange={(e) =>
+  1180→                    setNewGoal({ ...newGoal, deadline: e.target.value })
+  1181→                  }
+  1182→                />
+  1183→              </div>
+  1184→              <div className="space-y-2">
+  1185→                <Label>Couleur</Label>
+  1186→                <div className="flex gap-2 flex-wrap mt-1">
+  1187→                  {["#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316", "#84cc16", "#e11d48"].map(
+  1188→                    (c) => (
+  1189→                      <button
+  1190→                        key={c}
+  1191→                        type="button"
+  1192→                        className={`w-8 h-8 rounded-full border-2 transition-all ${
+  1193→                          newGoal.color === c
+  1194→                            ? "border-foreground scale-110"
+  1195→                            : "border-transparent hover:scale-105"
+  1196→                        }`}
+  1197→                        style={{ backgroundColor: c }}
+  1198→                        onClick={() => setNewGoal({ ...newGoal, color: c })}
+  1199→                      />
+  1200→                    )
+  1201→                  )}
+  1202→                </div>
+  1203→              </div>
+  1204→            </div>
+  1205→          </div>
+  1206→          <DialogFooter>
+  1207→            <Button variant="outline" onClick={() => setShowGoalForm(false)}>
+  1208→              Annuler
+  1209→            </Button>
+  1210→            <Button
+  1211→              onClick={() => {
+  1212→                if (!newGoal.name || !newGoal.targetAmount) {
+  1213→                  toast.error("Nom et montant cible requis")
+  1214→                  return
+  1215→                }
+  1216→                addSavingsGoal({
+  1217→                  name: newGoal.name,
+  1218→                  targetAmount: parseFloat(newGoal.targetAmount),
+  1219→                  currentAmount: parseFloat(newGoal.currentAmount) || 0,
+  1220→                  deadline: newGoal.deadline || null,
+  1221→                  color: newGoal.color,
+  1222→                })
+  1223→                setNewGoal({ name: "", targetAmount: "", currentAmount: "0", deadline: "", color: "#10b981" })
+  1224→                setShowGoalForm(false)
+  1225→              }}
+  1226→            >
+  1227→              Créer l'objectif
+  1228→            </Button>
+  1229→          </DialogFooter>
+  1230→        </DialogContent>
+  1231→      </Dialog>
+  1232→
+  1233→      {/* Add Funds Dialog */}
+  1234→      <Dialog open={!!addFundsGoalId} onOpenChange={() => setAddFundsGoalId(null)}>
+  1235→        <DialogContent>
+  1236→          <DialogHeader>
+  1237→            <DialogTitle>Ajouter des fonds</DialogTitle>
+  1238→            <DialogDescription>Combien souhaitez-vous ajouter ?</DialogDescription>
+  1239→          </DialogHeader>
+  1240→          <div className="space-y-4">
+  1241→            <div className="space-y-2">
+  1242→              <Label>Montant (€)</Label>
+  1243→              <Input
+  1244→                type="number"
+  1245→                step="0.01"
+  1246→                placeholder="0"
+  1247→                value={addFundsAmount}
+  1248→                onChange={(e) => setAddFundsAmount(e.target.value)}
+  1249→                className="text-2xl font-bold h-14 text-center"
+  1250→              />
+  1251→            </div>
+  1252→          </div>
+  1253→          <DialogFooter>
+  1254→            <Button variant="outline" onClick={() => setAddFundsGoalId(null)}>
+  1255→              Annuler
+  1256→            </Button>
+  1257→            <Button
+  1258→              onClick={() => {
+  1259→                if (!addFundsGoalId || !addFundsAmount) return
+  1260→                addFundsToGoal(addFundsGoalId, parseFloat(addFundsAmount))
+  1261→                setAddFundsAmount("")
+  1262→                setAddFundsGoalId(null)
+  1263→              }}
+  1264→            >
+  1265→              Ajouter
+  1266→            </Button>
+  1267→          </DialogFooter>
+  1268→        </DialogContent>
+  1269→      </Dialog>
+  1270→
+  1271→      {/* Delete Goal */}
+  1272→      <AlertDialog open={!!deleteGoalId} onOpenChange={() => setDeleteGoalId(null)}>
+  1273→        <AlertDialogContent>
+  1274→          <AlertDialogHeader>
+  1275→            <AlertDialogTitle>Supprimer cet objectif ?</AlertDialogTitle>
+  1276→            <AlertDialogDescription>
+  1277→              Cette action est irréversible. L'épargne enregistrée sera perdue.
+  1278→            </AlertDialogDescription>
+  1279→          </AlertDialogHeader>
+  1280→          <AlertDialogFooter>
+  1281→            <AlertDialogCancel>Annuler</AlertDialogCancel>
+  1282→            <AlertDialogAction
+  1283→              className="bg-rose-500 hover:bg-rose-600"
+  1284→              onClick={() => {
+  1285→                if (deleteGoalId) deleteSavingsGoal(deleteGoalId)
+  1286→                setDeleteGoalId(null)
+  1287→              }}
+  1288→            >
+  1289→              Supprimer
+  1290→            </AlertDialogAction>
+  1291→          </AlertDialogFooter>
+  1292→        </AlertDialogContent>
+  1293→      </AlertDialog>
+  1294→    </div>
+  1295→  )
+  1296→
+  1297→  // ─── Settings View ────────────────────────────────
+  1298→  const [settingsForm, setSettingsForm] = useState({
+  1299→    monthlySalary: "0",
+  1300→    monthlySavings: "0",
+  1301→  })
+  1302→  const [newCat, setNewCat] = useState({ name: "", color: "#64748b" })
+  1303→
+  1304→  // Sync settings form when settings data changes
+  1305→  const [settingsInitialized, setSettingsInitialized] = useState(false)
+  1306→  useEffect(() => {
+  1307→    if (!settings || settingsInitialized) return
+  1308→    queueMicrotask(() => {
+  1309→      setSettingsForm({
+  1310→        monthlySalary: String(settings.monthlySalary),
+  1311→        monthlySavings: String(settings.monthlySavings),
+  1312→      })
+  1313→      setSettingsInitialized(true)
+  1314→    })
+  1315→  }, [settings, settingsInitialized])
+  1316→
+  1317→  const handleExport = async () => {
+  1318→    const csv = await dbExportCSV()
+  1319→    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" })
+  1320→    const url = URL.createObjectURL(blob)
+  1321→    const a = document.createElement("a")
+  1322→    a.href = url
+  1323→    a.download = `depenses_export_${new Date().toISOString().slice(0, 10)}.csv`
+  1324→    a.click()
+  1325→    URL.revokeObjectURL(url)
+  1326→    toast.success("Export terminé")
+  1327→  }
+  1328→
+  1329→  const handleFullBackup = async () => {
+  1330→    const json = await dbExportFullBackup()
+  1331→    const blob = new Blob([json], { type: "application/json;charset=utf-8" })
+  1332→    const url = URL.createObjectURL(blob)
+  1333→    const a = document.createElement("a")
+  1334→    const date = new Date().toISOString().slice(0, 10)
+  1335→    a.href = url
+  1336→    a.download = `mesdepenses_backup_${date}.json`
+  1337→    a.click()
+  1338→    URL.revokeObjectURL(url)
+  1339→    toast.success("Sauvegarde complète téléchargée")
+  1340→  }
+  1341→
+  1342→  const handleFullRestore = async (file: File) => {
+  1343→    try {
+  1344→      const json = await file.text()
+  1345→      const data = await dbImportFullBackup(json)
+  1346→      // Update all state
+  1347→      setSettings(data.settings)
+  1348→      setCategories(data.categories)
+  1349→      setSavingsGoals(data.savingsGoals)
+  1350→      // Rebuild expenses with categories attached
+  1351→      const catMap = new Map(data.categories.map((c) => [c.id, c]))
+  1352→      const expsWithCat = data.expenses.map((e) => ({
+  1353→        ...e,
+  1354→        category: e.categoryId ? catMap.get(e.categoryId) || null : null,
+  1355→      }))
+  1356→      setAllMonthExpenses(expsWithCat.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+  1357→      setExpenses(expsWithCat)
+  1358→      toast.success(`Restauré : ${data.expenses.length} dépenses, ${data.savingsGoals.length} objectifs`)
+  1359→    } catch (e) {
+  1360→      toast.error("Erreur lors de la restauration : fichier invalide")
+  1361→    }
+  1362→  }
+  1363→
+  1364→  const renderSettings = () => (
+  1365→    <div className="space-y-6">
+  1366→      <div>
+  1367→        <h1 className="text-2xl font-bold">Paramètres</h1>
+  1368→        <p className="text-muted-foreground text-sm mt-1">
+  1369→          Configurez votre profil financier et vos préférences
+  1370→        </p>
+  1371→      </div>
+  1372→
+  1373→      {/* Financial Profile */}
+  1374→      <Card>
+  1375→        <CardHeader>
+  1376→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+  1377→            <Wallet className="h-4 w-4" />
+  1378→            Profil financier
+  1379→          </CardTitle>
+  1380→        </CardHeader>
+  1381→        <CardContent className="space-y-4">
+  1382→          <div className="space-y-2">
+  1383→            <Label>Salaire mensuel (€)</Label>
+  1384→            <Input
+  1385→              type="number"
+  1386→              value={settingsForm.monthlySalary}
+  1387→              onChange={(e) =>
+  1388→                setSettingsForm({ ...settingsForm, monthlySalary: e.target.value })
+  1389→              }
+  1390→              placeholder="2000"
+  1391→            />
+  1392→          </div>
+  1393→          <div className="space-y-2">
+  1394→            <Label>Épargne mensuelle cible (€)</Label>
+  1395→            <Input
+  1396→              type="number"
+  1397→              value={settingsForm.monthlySavings}
+  1398→              onChange={(e) =>
+  1399→                setSettingsForm({ ...settingsForm, monthlySavings: e.target.value })
+  1400→              }
+  1401→              placeholder="200"
+  1402→            />
+  1403→          </div>
+  1404→          <Button
+  1405→            onClick={() =>
+  1406→              updateSettings({
+  1407→                monthlySalary: parseFloat(settingsForm.monthlySalary) || 0,
+  1408→                monthlySavings: parseFloat(settingsForm.monthlySavings) || 0,
+  1409→              })
+  1410→            }
+  1411→          >
+  1412→            <CheckCircle2 className="h-4 w-4 mr-2" />
+  1413→            Enregistrer
+  1414→          </Button>
+  1415→        </CardContent>
+  1416→      </Card>
+  1417→
+  1418→      {/* Theme */}
+  1419→      <Card>
+  1420→        <CardHeader>
+  1421→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+  1422→            {mounted && theme === "dark" ? (
+  1423→              <Moon className="h-4 w-4" />
+  1424→            ) : (
+  1425→              <Sun className="h-4 w-4" />
+  1426→            )}
+  1427→            Apparence
+  1428→          </CardTitle>
+  1429→        </CardHeader>
+  1430→        <CardContent>
+  1431→          <div className="flex items-center justify-between">
+  1432→            <div>
+  1433→              <p className="text-sm font-medium">Mode sombre</p>
+  1434→              <p className="text-xs text-muted-foreground">
+  1435→                Basculez entre le thème clair et sombre
+  1436→              </p>
+  1437→            </div>
+  1438→            <Switch
+  1439→              checked={mounted && theme === "dark"}
+  1440→              onCheckedChange={(checked) => setTheme(checked ? "dark" : "light")}
+  1441→            />
+  1442→          </div>
+  1443→        </CardContent>
+  1444→      </Card>
+  1445→
+  1446→      {/* Categories */}
+  1447→      <Card>
+  1448→        <CardHeader>
+  1449→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+  1450→            <Filter className="h-4 w-4" />
+  1451→            Gestion des catégories
+  1452→          </CardTitle>
+  1453→        </CardHeader>
+  1454→        <CardContent className="space-y-4">
+  1455→          <div className="space-y-3">
+  1456→            {categories.map((cat) => (
+  1457→              <div key={cat.id} className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/50">
+  1458→                <div className="flex items-center gap-3">
+  1459→                  <div
+  1460→                    className="w-8 h-8 rounded-lg flex items-center justify-center text-white text-xs font-bold"
+  1461→                    style={{ backgroundColor: cat.color }}
+  1462→                  >
+  1463→                    {cat.name.charAt(0)}
+  1464→                  </div>
+  1465→                  <div>
+  1466→                    <p className="text-sm font-medium">{cat.name}</p>
+  1467→                    {cat.budgetLimit > 0 && (
+  1468→                      <p className="text-xs text-muted-foreground">
+  1469→                        Budget: {formatMoney(cat.budgetLimit)}/mois
+  1470→                      </p>
+  1471→                    )}
+  1472→                  </div>
+  1473→                </div>
+  1474→                <Button
+  1475→                  variant="ghost"
+  1476→                  size="icon"
+  1477→                  className="h-8 w-8 text-rose-500 hover:text-rose-600"
+  1478→                  onClick={() => deleteCategory(cat.id)}
+  1479→                >
+  1480→                  <Trash2 className="h-3.5 w-3.5" />
+  1481→                </Button>
+  1482→              </div>
+  1483→            ))}
+  1484→          </div>
+  1485→          <Separator />
+  1486→          <div className="space-y-3">
+  1487→            <p className="text-sm font-medium">Ajouter une catégorie</p>
+  1488→            <div className="flex gap-2">
+  1489→              <Input
+  1490→                placeholder="Nom de la catégorie"
+  1491→                value={newCat.name}
+  1492→                onChange={(e) => setNewCat({ ...newCat, name: e.target.value })}
+  1493→                className="flex-1"
+  1494→              />
+  1495→              <div className="flex gap-1">
+  1496→                {["#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316", "#84cc16"].map(
+  1497→                  (c) => (
+  1498→                    <button
+  1499→                      key={c}
+  1500→                      type="button"
+  1501→                      className={`w-7 h-7 rounded-full border-2 transition-all ${
+  1502→                        newCat.color === c ? "border-foreground scale-110" : "border-transparent"
+  1503→                      }`}
+  1504→                      style={{ backgroundColor: c }}
+  1505→                      onClick={() => setNewCat({ ...newCat, color: c })}
+  1506→                    />
+  1507→                  )
+  1508→                )}
+  1509→              </div>
+  1510→            </div>
+  1511→            <Button
+  1512→              size="sm"
+  1513→              onClick={() => {
+  1514→                if (!newCat.name) {
+  1515→                  toast.error("Nom de catégorie requis")
+  1516→                  return
+  1517→                }
+  1518→                addCategory({ name: newCat.name, icon: "CircleDot", color: newCat.color, budgetLimit: 0 })
+  1519→                setNewCat({ name: "", color: "#64748b" })
+  1520→              }}
+  1521→            >
+  1522→              <PlusCircle className="h-4 w-4 mr-1" />
+  1523→              Ajouter
+  1524→            </Button>
+  1525→          </div>
+  1526→        </CardContent>
+  1527→      </Card>
+  1528→
+  1529→      {/* Sync between devices */}
+  1530→      <Card className="border-primary/30 bg-primary/5">
+  1531→        <CardHeader>
+  1532→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+  1533→            <Upload className="h-4 w-4 text-primary" />
+  1534→            <span className="text-primary font-semibold">Synchroniser entre appareils</span>
+  1535→          </CardTitle>
+  1536→        </CardHeader>
+  1537→        <CardContent className="space-y-3">
+  1538→          <p className="text-xs text-muted-foreground">
+  1539→            Exportez toutes vos données sur un appareil, puis importez-les sur l'autre (iPhone ↔ PC).
+  1540→          </p>
+  1541→          <Button className="w-full justify-start" onClick={handleFullBackup}>
+  1542→            <Download className="h-4 w-4 mr-2" />
+  1543→            Sauvegarder toutes mes données (JSON)
+  1544→          </Button>
+  1545→          <label className="block w-full">
+  1546→            <input
+  1547→              type="file"
+  1548→              accept=".json"
+  1549→              className="hidden"
+  1550→              onChange={(e) => {
+  1551→                const file = e.target.files?.[0]
+  1552→                if (file) handleFullRestore(file)
+  1553→                e.target.value = ""
+  1554→              }}
+  1555→            />
+  1556→            <Button variant="outline" className="w-full justify-start cursor-pointer" asChild>
+  1557→              <span>
+  1558→                <Upload className="h-4 w-4 mr-2" />
+  1559→                Restaurer depuis un fichier (JSON)
+  1560→              </span>
+  1561→            </Button>
+  1562→          </label>
+  1563→        </CardContent>
+  1564→      </Card>
+  1565→
+  1566→      {/* Data */}
+  1567→      <Card>
+  1568→        <CardHeader>
+  1569→          <CardTitle className="text-sm font-medium flex items-center gap-2">
+  1570→            <Download className="h-4 w-4" />
+  1571→            Données
+  1572→          </CardTitle>
+  1573→        </CardHeader>
+  1574→        <CardContent className="space-y-3">
+  1575→          <Button variant="outline" className="w-full justify-start" onClick={handleExport}>
+  1576→            <Download className="h-4 w-4 mr-2" />
+  1577→            Exporter toutes les dépenses (CSV)
+  1578→          </Button>
+  1579→          <Button
+  1580→            variant="outline"
+  1581→            className="w-full justify-start"
+  1582→            onClick={async () => {
+  1583→              const { settings: s, categories: c } = await dbResetData()
+  1584→              setSettings(s)
+  1585→              setCategories(c)
+  1586→              setSavingsGoals([])
+  1587→              setAllMonthExpenses([])
+  1588→              setExpenses([])
+  1589→              toast.success("Données par défaut réinitialisées")
+  1590→            }}
+  1591→          >
+  1592→            <RotateCcw className="h-4 w-4 mr-2" />
+  1593→            Réinitialiser les données par défaut
+  1594→          </Button>
+  1595→        </CardContent>
+  1596→      </Card>
+  1597→    </div>
+  1598→  )
+  1599→
+  1600→  // ─── Loading State ────────────────────────────────
+  1601→  if (loading) {
+  1602→    return (
+  1603→      <div className="min-h-screen flex items-center justify-center">
+  1604→        <div className="space-y-4 text-center">
+  1605→          <div className="h-10 w-10 rounded-full border-4 border-primary border-t-transparent animate-spin mx-auto" />
+  1606→          <p className="text-sm text-muted-foreground">Chargement...</p>
+  1607→        </div>
+  1608→      </div>
+  1609→    )
+  1610→  }
+  1611→
+  1612→  // ─── Main Layout ───────────────────────────────────
+  1613→  const renderContent = () => {
+  1614→    switch (activeTab) {
+  1615→      case "dashboard":
+  1616→        return renderDashboard()
+  1617→      case "add":
+  1618→        return renderAddExpense()
+  1619→      case "history":
+  1620→        return renderHistory()
+  1621→      case "savings":
+  1622→        return renderSavings()
+  1623→      case "settings":
+  1624→        return renderSettings()
+  1625→    }
+  1626→  }
+  1627→
+  1628→  return (
+  1629→    <div className="min-h-screen flex flex-col bg-background">
+  1630→      {/* Desktop Sidebar */}
+  1631→      {!isMobile && (
+  1632→        <aside className="fixed left-0 top-0 bottom-0 w-64 border-r bg-card/50 backdrop-blur-sm z-40">
+  1633→          <div className="p-6">
+  1634→            <div className="flex items-center gap-2 mb-8">
+  1635→              <div className="w-9 h-9 rounded-xl bg-primary flex items-center justify-center">
+  1636→                <Wallet className="h-5 w-5 text-primary-foreground" />
+  1637→              </div>
+  1638→              <div>
+  1639→                <h2 className="font-bold text-lg leading-tight">MesDépenses</h2>
+  1640→                <p className="text-xs text-muted-foreground">Suivi de budget</p>
+  1641→              </div>
+  1642→            </div>
+  1643→            <nav className="space-y-1">
+  1644→              {tabs.map((tab) => (
+  1645→                <button
+  1646→                  key={tab.id}
+  1647→                  onClick={() => setActiveTab(tab.id)}
+  1648→                  className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+  1649→                    activeTab === tab.id
+  1650→                      ? "bg-primary text-primary-foreground shadow-sm"
+  1651→                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+  1652→                  }`}
+  1653→                >
+  1654→                  {tab.icon}
+  1655→                  {tab.label}
+  1656→                </button>
+  1657→              ))}
+  1658→            </nav>
+  1659→          </div>
+  1660→          {/* Quick Stats in Sidebar */}
+  1661→          <div className="absolute bottom-0 left-0 right-0 p-4 border-t">
+  1662→            <div className="text-xs text-muted-foreground space-y-1">
+  1663→              <div className="flex justify-between">
+  1664→                <span>Solde restant</span>
+  1665→                <span className={remaining >= 0 ? "text-emerald-500 font-semibold" : "text-rose-500 font-semibold"}>
+  1666→                  {formatMoney(remaining)}
+  1667→                </span>
+  1668→              </div>
+  1669→            </div>
+  1670→          </div>
+  1671→        </aside>
+  1672→      )}
+  1673→
+  1674→      {/* Main Content */}
+  1675→      <main
+  1676→        className={`flex-1 ${isMobile ? "" : "ml-64"}`}
+  1677→      >
+  1678→        <div className="max-w-4xl mx-auto px-4 py-6 pb-24 md:pb-6">
+  1679→          <AnimatePresence mode="wait">
+  1680→            <motion.div
+  1681→              key={activeTab}
+  1682→              initial={{ opacity: 0, y: 10 }}
+  1683→              animate={{ opacity: 1, y: 0 }}
+  1684→              exit={{ opacity: 0, y: -10 }}
+  1685→              transition={{ duration: 0.2 }}
+  1686→            >
+  1687→              {renderContent()}
+  1688→            </motion.div>
+  1689→          </AnimatePresence>
+  1690→        </div>
+  1691→      </main>
+  1692→
+  1693→      {/* Mobile Bottom Nav */}
+  1694→      {isMobile && (
+  1695→        <nav className="fixed bottom-0 left-0 right-0 bg-card/80 backdrop-blur-md border-t z-40 safe-area-inset-bottom">
+  1696→          <div className="flex items-center justify-around py-1 px-2">
+  1697→            {tabs.map((tab) => (
+  1698→              <button
+  1699→                key={tab.id}
+  1700→                onClick={() => setActiveTab(tab.id)}
+  1701→                className={`flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl transition-all min-w-[56px] ${
+  1702→                  activeTab === tab.id
+  1703→                    ? "text-primary"
+  1704→                    : "text-muted-foreground"
+  1705→                }`}
+  1706→              >
+  1707→                <div className={activeTab === tab.id ? "scale-110" : ""}>
+  1708→                  {tab.icon}
+  1709→                </div>
+  1710→                <span className="text-[10px] font-medium">{tab.label}</span>
+  1711→              </button>
+  1712→            ))}
+  1713→          </div>
+  1714→        </nav>
+  1715→      )}
+  1716→
+  1717→      {/* Mobile FAB */}
+  1718→      {isMobile && activeTab !== "add" && (
+  1719→        <button
+  1720→          onClick={() => setActiveTab("add")}
+  1721→          className="fixed bottom-20 right-4 w-14 h-14 rounded-full bg-primary text-primary-foreground shadow-lg flex items-center justify-center z-40 hover:scale-105 active:scale-95 transition-transform"
+  1722→        >
+  1723→          <PlusCircle className="h-6 w-6" />
+  1724→        </button>
+  1725→      )}
+  1726→    </div>
+  1727→  )
+  1728→}
+  1729→
