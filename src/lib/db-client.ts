@@ -42,6 +42,17 @@ export interface SavingsGoal {
   updatedAt?: string
 }
 
+export interface Income {
+  id?: string
+  amount: number
+  description: string
+  date: string // ISO string
+  type: "ndf" | "bonus" | "other"
+  note?: string | null
+  createdAt?: string
+  updatedAt?: string
+}
+
 // ─── DB Schema ──────────────────────────────────────
 
 interface MesDepensesDB extends DBSchema {
@@ -62,6 +73,11 @@ interface MesDepensesDB extends DBSchema {
   savingsGoals: {
     key: string
     value: SavingsGoal
+  }
+  incomes: {
+    key: string
+    value: Income
+    indexes: { "by-date": string }
   }
 }
 
@@ -112,6 +128,11 @@ function getDB() {
         // SavingsGoals store
         if (!db.objectStoreNames.contains("savingsGoals")) {
           db.createObjectStore("savingsGoals", { keyPath: "id" })
+        }
+        // Incomes store
+        if (!db.objectStoreNames.contains("incomes")) {
+          const incStore = db.createObjectStore("incomes", { keyPath: "id" })
+          incStore.createIndex("by-date", "date")
         }
       },
     })
@@ -369,6 +390,70 @@ export async function deleteSavingsGoal(id: string): Promise<void> {
   await db.delete("savingsGoals", id)
 }
 
+// ─── Incomes ─────────────────────────────────────────
+
+export async function getIncomes(opts?: {
+  month?: string
+  sortBy?: "date" | "amount"
+  sortOrder?: "asc" | "desc"
+}): Promise<Income[]> {
+  const db = await getDB()
+  let incomes = await db.getAll("incomes")
+
+  if (opts?.month) {
+    const [year, month] = opts.month.split("-").map(Number)
+    const startDate = new Date(year, month - 1, 1).getTime()
+    const endDate = new Date(year, month, 0, 23, 59, 59, 999).getTime()
+    incomes = incomes.filter((i) => {
+      const t = new Date(i.date).getTime()
+      return t >= startDate && t <= endDate
+    })
+  }
+
+  const sortBy = opts?.sortBy || "date"
+  const sortOrder = opts?.sortOrder || "desc"
+  incomes.sort((a, b) => {
+    const aVal = sortBy === "date" ? new Date(a.date).getTime() : a.amount
+    const bVal = sortBy === "date" ? new Date(b.date).getTime() : b.amount
+    return sortOrder === "asc" ? aVal - bVal : bVal - aVal
+  })
+
+  return incomes
+}
+
+export async function addIncome(data: {
+  amount: number
+  description: string
+  date: string
+  type: "ndf" | "bonus" | "other"
+  note?: string | null
+}): Promise<Income> {
+  const db = await getDB()
+  const now = new Date().toISOString()
+  const income: Income = {
+    ...data,
+    id: uid(),
+    createdAt: now,
+    updatedAt: now,
+  }
+  await db.put("incomes", income)
+  return income
+}
+
+export async function updateIncome(id: string, data: Partial<Income>): Promise<Income> {
+  const db = await getDB()
+  const existing = await db.get("incomes", id)
+  if (!existing) throw new Error("Revenu introuvable")
+  const updated: Income = { ...existing, ...data, updatedAt: new Date().toISOString() }
+  await db.put("incomes", updated)
+  return updated
+}
+
+export async function deleteIncome(id: string): Promise<void> {
+  const db = await getDB()
+  await db.delete("incomes", id)
+}
+
 // ─── CSV Import ─────────────────────────────────────
 
 export async function importCSV(text: string): Promise<{ imported: number; errors: string[]; total: number }> {
@@ -460,6 +545,7 @@ export async function resetData(): Promise<{ settings: Settings; categories: Cat
   const db = await getDB()
   await db.clear("expenses")
   await db.clear("savingsGoals")
+  await db.clear("incomes")
   await db.clear("categories")
   await db.clear("settings")
   return seedDB()
@@ -474,6 +560,7 @@ export interface BackupData {
   categories: Category[]
   expenses: Expense[]
   savingsGoals: SavingsGoal[]
+  incomes: Income[]
 }
 
 export async function exportFullBackup(): Promise<string> {
@@ -482,6 +569,7 @@ export async function exportFullBackup(): Promise<string> {
   const categories = await db.getAll("categories")
   const expenses = await db.getAll("expenses")
   const savingsGoals = await db.getAll("savingsGoals")
+  const incomes = await db.getAll("incomes")
 
   const backup: BackupData = {
     version: 1,
@@ -490,6 +578,7 @@ export async function exportFullBackup(): Promise<string> {
     categories,
     expenses,
     savingsGoals,
+    incomes,
   }
 
   return JSON.stringify(backup, null, 2)
@@ -500,6 +589,7 @@ export async function importFullBackup(jsonStr: string): Promise<{
   categories: Category[]
   expenses: Expense[]
   savingsGoals: SavingsGoal[]
+  incomes: Income[]
 }> {
   const backup: BackupData = JSON.parse(jsonStr)
 
@@ -527,9 +617,10 @@ export async function importFullBackup(jsonStr: string): Promise<{
 
   // Restore savings goals
   const savingsGoals: SavingsGoal[] = backup.savingsGoals || []
+  const incomes: Income[] = backup.incomes || []
 
   // Write everything in a transaction
-  const tx = db.transaction(["settings", "categories", "expenses", "savingsGoals"], "readwrite")
+  const tx = db.transaction(["settings", "categories", "expenses", "savingsGoals", "incomes"], "readwrite")
 
   await tx.objectStore("settings").put(backup.settings)
   for (const cat of categories) {
@@ -541,8 +632,11 @@ export async function importFullBackup(jsonStr: string): Promise<{
   for (const goal of savingsGoals) {
     await tx.objectStore("savingsGoals").put(goal)
   }
+  for (const inc of incomes) {
+    await tx.objectStore("incomes").put(inc)
+  }
 
   await tx.done
 
-  return { settings: backup.settings, categories, expenses, savingsGoals }
+  return { settings: backup.settings, categories, expenses, savingsGoals, incomes }
 }

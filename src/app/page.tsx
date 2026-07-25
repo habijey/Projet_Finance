@@ -112,6 +112,11 @@ import {
   exportFullBackup as dbExportFullBackup,
   importFullBackup as dbImportFullBackup,
   resetData as dbResetData,
+  getIncomes as dbGetIncomes,
+  addIncome as dbAddIncome,
+  updateIncome as dbUpdateIncome,
+  deleteIncome as dbDeleteIncome,
+  type Income as DBIncome,
   type Settings as DBSettings,
   type Category as DBCategory,
   type Expense as DBExpense,
@@ -123,6 +128,7 @@ type Settings = DBSettings
 type Category = DBCategory
 type Expense = DBExpense
 type SavingsGoal = DBSavingsGoal
+type Income = DBIncome
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -170,6 +176,8 @@ export default function Home() {
   const [categories, setCategories] = useState<Category[]>([])
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [allMonthExpenses, setAllMonthExpenses] = useState<Expense[]>([])
+  const [incomes, setIncomes] = useState<Income[]>([])
+  const [allMonthIncomes, setAllMonthIncomes] = useState<Income[]>([])
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([])
   const [loading, setLoading] = useState(true)
   const [mounted] = useState(true)
@@ -189,6 +197,9 @@ export default function Home() {
         const monthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
         if (cancelled) return
         setAllMonthExpenses(monthExpenses)
+        const monthIncomes = await dbGetIncomes({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+        if (cancelled) return
+        setAllMonthIncomes(monthIncomes)
       } catch (e) {
         console.error("Init error", e)
       } finally {
@@ -215,7 +226,8 @@ export default function Home() {
 
   // ─── Derived stats ────────────────────────────────
   const totalMonthExpenses = allMonthExpenses.reduce((s, e) => s + e.amount, 0)
-  const remaining = (settings?.monthlySalary || 0) - (settings?.monthlySavings || 0) - totalMonthExpenses
+  const totalMonthIncomes = allMonthIncomes.reduce((s, i) => s + i.amount, 0)
+  const remaining = (settings?.monthlySalary || 0) + totalMonthIncomes - (settings?.monthlySavings || 0) - totalMonthExpenses
 
   // Budget alerts
   const budgetAlerts = categories
@@ -261,6 +273,24 @@ export default function Home() {
     setAllMonthExpenses((prev) => prev.filter((e) => e.id !== id))
     setExpenses((prev) => prev.filter((e) => e.id !== id))
     toast.success("Dépense supprimée")
+  }
+
+  const addIncomeAction = async (data: {
+    amount: number
+    description: string
+    date: string
+    type: "ndf" | "bonus" | "other"
+    note: string | null
+  }) => {
+    const income = await dbAddIncome(data)
+    setAllMonthIncomes((prev) => [income, ...prev])
+    toast.success(`Revenu de ${formatMoney(data.amount)} ajouté`)
+  }
+
+  const deleteIncomeAction = async (id: string) => {
+    await dbDeleteIncome(id)
+    setAllMonthIncomes((prev) => prev.filter((i) => i.id !== id))
+    toast.success("Revenu supprimé")
   }
 
   const updateSettings = async (data: Partial<DBSettings>) => {
@@ -349,7 +379,7 @@ export default function Home() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -357,6 +387,15 @@ export default function Home() {
               <span className="text-xs text-muted-foreground font-medium">Salaire</span>
             </div>
             <p className="text-xl font-bold">{formatMoney(settings?.monthlySalary || 0)}</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <TrendingUp className="h-4 w-4 text-emerald-500" />
+              <span className="text-xs text-muted-foreground font-medium">Revenus</span>
+            </div>
+            <p className="text-xl font-bold text-emerald-600 dark:text-emerald-400">{formatMoney(totalMonthIncomes)}</p>
           </CardContent>
         </Card>
         <Card className="bg-gradient-to-br from-amber-500/10 to-amber-500/5 border-amber-500/20">
@@ -532,6 +571,45 @@ export default function Home() {
           )}
         </CardContent>
       </Card>
+
+      {/* Recent Incomes */}
+      {allMonthIncomes.length > 0 && (
+        <Card className="border-emerald-500/20">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Derniers revenus</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-3">
+              {allMonthIncomes.slice(0, 5).map((income) => (
+                <div key={income.id} className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-9 h-9 rounded-lg flex items-center justify-center text-sm font-bold text-white shrink-0 bg-emerald-500">
+                      {income.type === "ndf" ? "N" : income.type === "bonus" ? "B" : "+"}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium">{income.description}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {income.type === "ndf" ? "Note de frais" : income.type === "bonus" ? "Bonus / Prime" : "Autre"} · {formatDateShort(income.date)}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-emerald-500">+{formatMoney(income.amount)}</p>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-rose-500 hover:text-rose-600"
+                      onClick={() => deleteIncomeAction(income.id!)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 
@@ -541,6 +619,14 @@ export default function Home() {
     description: "",
     date: new Date().toISOString().slice(0, 10),
     categoryId: "",
+    note: "",
+  })
+
+  const [newIncome, setNewIncome] = useState({
+    amount: "",
+    description: "",
+    date: new Date().toISOString().slice(0, 10),
+    type: "ndf" as "ndf" | "bonus" | "other",
     note: "",
   })
 
@@ -655,6 +741,99 @@ export default function Home() {
         </CardContent>
       </Card>
 
+      {/* Add Income */}
+      <Card className="border-emerald-500/30 bg-emerald-500/5">
+        <CardHeader>
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <TrendingUp className="h-4 w-4 text-emerald-500" />
+            Ajouter un revenu (NDF, bonus...)
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label>Montant (€)</Label>
+            <Input
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="0,00"
+              value={newIncome.amount}
+              onChange={(e) => setNewIncome({ ...newIncome, amount: e.target.value })}
+              className="text-2xl font-bold h-14 text-center text-emerald-600 dark:text-emerald-400"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Description</Label>
+            <Input
+              placeholder="Ex: NDF déplacement, Bonus..."
+              value={newIncome.description}
+              onChange={(e) => setNewIncome({ ...newIncome, description: e.target.value })}
+            />
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <Label>Type</Label>
+              <Select
+                value={newIncome.type}
+                onValueChange={(v) => setNewIncome({ ...newIncome, type: v as "ndf" | "bonus" | "other" })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ndf">Note de frais</SelectItem>
+                  <SelectItem value="bonus">Bonus / Prime</SelectItem>
+                  <SelectItem value="other">Autre revenu</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Date</Label>
+              <Input
+                type="date"
+                value={newIncome.date}
+                onChange={(e) => setNewIncome({ ...newIncome, date: e.target.value })}
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>Note (optionnel)</Label>
+            <Textarea
+              placeholder="Détails..."
+              value={newIncome.note}
+              onChange={(e) => setNewIncome({ ...newIncome, note: e.target.value })}
+              rows={2}
+            />
+          </div>
+          <Button
+            className="w-full h-12 text-base font-semibold bg-emerald-600 hover:bg-emerald-700"
+            onClick={() => {
+              if (!newIncome.amount || !newIncome.description) {
+                toast.error("Montant et description requis")
+                return
+              }
+              addIncomeAction({
+                amount: parseFloat(newIncome.amount),
+                description: newIncome.description,
+                date: newIncome.date,
+                type: newIncome.type,
+                note: newIncome.note || null,
+              })
+              setNewIncome({
+                amount: "",
+                description: "",
+                date: new Date().toISOString().slice(0, 10),
+                type: "ndf",
+                note: "",
+              })
+            }}
+          >
+            <TrendingUp className="h-5 w-5 mr-2" />
+            Ajouter le revenu
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* CSV Import */}
       <Card>
         <CardHeader>
@@ -719,8 +898,8 @@ export default function Home() {
       {/* Filters */}
       <Card>
         <CardContent className="p-4 space-y-3">
-          <div className="flex flex-wrap gap-3">
-            <div className="flex-1 min-w-[140px]">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
               <Label className="text-xs text-muted-foreground">Mois</Label>
               <Input
                 type="month"
@@ -728,7 +907,7 @@ export default function Home() {
                 onChange={(e) => setFilters({ month: e.target.value })}
               />
             </div>
-            <div className="flex-1 min-w-[140px]">
+            <div>
               <Label className="text-xs text-muted-foreground">Catégorie</Label>
               <Select
                 value={filters.categoryId || "all"}
@@ -752,7 +931,7 @@ export default function Home() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex-1 min-w-[140px]">
+            <div>
               <Label className="text-xs text-muted-foreground">Rechercher</Label>
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -1355,7 +1534,16 @@ export default function Home() {
       }))
       setAllMonthExpenses(expsWithCat.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
       setExpenses(expsWithCat)
-      toast.success(`Restauré : ${data.expenses.length} dépenses, ${data.savingsGoals.length} objectifs`)
+      // Restore incomes
+      const monthIncs = (data.incomes || []).filter((i) => {
+        const [year, month] = getCurrentMonthStr().split("-").map(Number)
+        const startDate = new Date(year, month - 1, 1).getTime()
+        const endDate = new Date(year, month, 0, 23, 59, 59, 999).getTime()
+        const t = new Date(i.date).getTime()
+        return t >= startDate && t <= endDate
+      })
+      setAllMonthIncomes(monthIncs.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()))
+      toast.success(`Restauré : ${data.expenses.length} dépenses, ${data.savingsGoals.length} objectifs, ${data.incomes.length} revenus`)
     } catch (e) {
       toast.error("Erreur lors de la restauration : fichier invalide")
     }
@@ -1529,8 +1717,8 @@ export default function Home() {
       {/* Sync between devices */}
       <Card className="border-primary/30 bg-primary/5">
         <CardHeader>
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Upload className="h-4 w-4 text-primary" />
+          <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
+            <Upload className="h-4 w-4 text-primary shrink-0" />
             <span className="text-primary font-semibold">Synchroniser entre appareils</span>
           </CardTitle>
         </CardHeader>
@@ -1538,9 +1726,9 @@ export default function Home() {
           <p className="text-xs text-muted-foreground">
             Exportez toutes vos données sur un appareil, puis importez-les sur l'autre (iPhone ↔ PC).
           </p>
-          <Button className="w-full justify-start" onClick={handleFullBackup}>
-            <Download className="h-4 w-4 mr-2" />
-            Sauvegarder toutes mes données (JSON)
+          <Button className="w-full" onClick={handleFullBackup}>
+            <Download className="h-4 w-4 mr-2 shrink-0" />
+            <span className="whitespace-normal text-left">Sauvegarder toutes mes données (JSON)</span>
           </Button>
           <label className="block w-full">
             <input
@@ -1553,10 +1741,10 @@ export default function Home() {
                 e.target.value = ""
               }}
             />
-            <Button variant="outline" className="w-full justify-start cursor-pointer" asChild>
-              <span>
-                <Upload className="h-4 w-4 mr-2" />
-                Restaurer depuis un fichier (JSON)
+            <Button variant="outline" className="w-full cursor-pointer" asChild>
+              <span className="flex items-center">
+                <Upload className="h-4 w-4 mr-2 shrink-0" />
+                <span className="whitespace-normal">Restaurer depuis un fichier (JSON)</span>
               </span>
             </Button>
           </label>
@@ -1585,6 +1773,7 @@ export default function Home() {
               setCategories(c)
               setSavingsGoals([])
               setAllMonthExpenses([])
+              setAllMonthIncomes([])
               setExpenses([])
               toast.success("Données par défaut réinitialisées")
             }}
@@ -1660,6 +1849,12 @@ export default function Home() {
           {/* Quick Stats in Sidebar */}
           <div className="absolute bottom-0 left-0 right-0 p-4 border-t">
             <div className="text-xs text-muted-foreground space-y-1">
+              <div className="flex justify-between">
+                <span>Revenus du mois</span>
+                <span className="text-emerald-500 font-semibold">
+                  {formatMoney(totalMonthIncomes)}
+                </span>
+              </div>
               <div className="flex justify-between">
                 <span>Solde restant</span>
                 <span className={remaining >= 0 ? "text-emerald-500 font-semibold" : "text-rose-500 font-semibold"}>
