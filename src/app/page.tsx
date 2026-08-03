@@ -89,6 +89,11 @@ import {
   Download,
   RotateCcw,
   FolderDown,
+  Repeat,
+  Sparkles,
+  Calculator,
+  AlertCircle,
+  Info,
 } from "lucide-react"
 
 // ─── IndexedDB client ───────────────────────────────────
@@ -116,11 +121,19 @@ import {
   addIncome as dbAddIncome,
   updateIncome as dbUpdateIncome,
   deleteIncome as dbDeleteIncome,
+  getSubscriptions as dbGetSubscriptions,
+  addSubscription as dbAddSubscription,
+  updateSubscription as dbUpdateSubscription,
+  deleteSubscription as dbDeleteSubscription,
+  generateSubscriptionExpenses as dbGenerateSubscriptionExpenses,
+  computeAdvice as dbComputeAdvice,
   type Income as DBIncome,
   type Settings as DBSettings,
   type Category as DBCategory,
   type Expense as DBExpense,
   type SavingsGoal as DBSavingsGoal,
+  type Subscription as DBSubscription,
+  type Advice as DBAdvice,
 } from "@/lib/db-client"
 
 // Local type aliases for convenience
@@ -129,6 +142,8 @@ type Category = DBCategory
 type Expense = DBExpense
 type SavingsGoal = DBSavingsGoal
 type Income = DBIncome
+type Subscription = DBSubscription
+type Advice = DBAdvice
 
 // ─── Helpers ─────────────────────────────────────────────
 
@@ -178,6 +193,8 @@ export default function Home() {
   const [allMonthExpenses, setAllMonthExpenses] = useState<Expense[]>([])
   const [incomes, setIncomes] = useState<Income[]>([])
   const [allMonthIncomes, setAllMonthIncomes] = useState<Income[]>([])
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([])
+  const [advices, setAdvices] = useState<Advice[]>([])
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([])
   const [loading, setLoading] = useState(true)
   const [mounted] = useState(true)
@@ -200,6 +217,21 @@ export default function Home() {
         const monthIncomes = await dbGetIncomes({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
         if (cancelled) return
         setAllMonthIncomes(monthIncomes)
+        const subs = await dbGetSubscriptions()
+        if (cancelled) return
+        setSubscriptions(subs)
+        // Auto-generate subscription expenses
+        const newExpenses = await dbGenerateSubscriptionExpenses()
+        let finalMonthExpenses = monthExpenses
+        if (newExpenses.length > 0 && !cancelled) {
+          finalMonthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
+          setAllMonthExpenses(finalMonthExpenses)
+        }
+        // Compute smart advice
+        if (!cancelled) {
+          const advs = await dbComputeAdvice(c, finalMonthExpenses, monthIncomes, s)
+          setAdvices(advs)
+        }
       } catch (e) {
         console.error("Init error", e)
       } finally {
@@ -228,6 +260,22 @@ export default function Home() {
   const totalMonthExpenses = allMonthExpenses.reduce((s, e) => s + e.amount, 0)
   const totalMonthIncomes = allMonthIncomes.reduce((s, i) => s + i.amount, 0)
   const remaining = (settings?.monthlySalary || 0) + totalMonthIncomes - (settings?.monthlySavings || 0) - totalMonthExpenses
+  const totalIncome = (settings?.monthlySalary || 0) + totalMonthIncomes
+  const savingsRate = totalIncome > 0 ? Math.round(((totalIncome - totalMonthExpenses - (settings?.monthlySavings || 0)) / totalIncome) * 100) : 0
+  // Daily allowance
+  const today = new Date()
+  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
+  const daysRemaining = daysInMonth - today.getDate() + 1
+  const dailyAllowance = daysRemaining > 0 ? Math.max(0, remaining) / daysRemaining : 0
+  // Total monthly subscriptions
+  const activeSubs = subscriptions.filter((s) => s.active)
+  const monthlySubsTotal = activeSubs
+    .filter((s) => s.frequency === "monthly")
+    .reduce((sum, s) => sum + s.amount, 0)
+  const yearlySubsMonthly = activeSubs
+    .filter((s) => s.frequency === "yearly")
+    .reduce((sum, s) => sum + s.amount / 12, 0)
+  const totalMonthlySubs = monthlySubsTotal + yearlySubsMonthly
 
   // Budget alerts
   const budgetAlerts = categories
@@ -291,6 +339,24 @@ export default function Home() {
     await dbDeleteIncome(id)
     setAllMonthIncomes((prev) => prev.filter((i) => i.id !== id))
     toast.success("Revenu supprimé")
+  }
+
+  const addSubscriptionAction = async (data: {
+    name: string; amount: number; frequency: "monthly" | "yearly"; dayOfMonth: number; categoryId: string | null; essential: boolean
+  }) => {
+    const sub = await dbAddSubscription(data)
+    setSubscriptions((prev) => [...prev, sub])
+    toast.success(`Abonnement "${sub.name}" ajouté`)
+  }
+  const toggleSubscription = async (id: string, active: boolean) => {
+    const sub = await dbUpdateSubscription(id, { active })
+    setSubscriptions((prev) => prev.map((s) => (s.id === id ? sub : s)))
+    toast.success(active ? "Abonnement réactivé" : "Abonnement mis en pause")
+  }
+  const deleteSubscriptionAction = async (id: string) => {
+    await dbDeleteSubscription(id)
+    setSubscriptions((prev) => prev.filter((s) => s.id !== id))
+    toast.success("Abonnement supprimé")
   }
 
   const updateSettings = async (data: Partial<DBSettings>) => {
@@ -379,7 +445,7 @@ export default function Home() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -431,6 +497,26 @@ export default function Home() {
             </p>
           </CardContent>
         </Card>
+        <Card className="bg-gradient-to-br from-blue-500/10 to-blue-500/5 border-blue-500/20">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Calculator className="h-4 w-4 text-blue-500" />
+              <span className="text-xs text-muted-foreground font-medium">Budget/jour</span>
+            </div>
+            <p className="text-xl font-bold text-blue-600 dark:text-blue-400">{formatMoney(dailyAllowance)}</p>
+          </CardContent>
+        </Card>
+        <Card className="bg-gradient-to-br from-purple-500/10 to-purple-500/5 border-purple-500/20">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Sparkles className="h-4 w-4 text-purple-500" />
+              <span className="text-xs text-muted-foreground font-medium">Taux épargne</span>
+            </div>
+            <p className={`text-xl font-bold ${savingsRate >= 20 ? "text-emerald-600 dark:text-emerald-400" : savingsRate >= 0 ? "text-amber-600 dark:text-amber-400" : "text-rose-600 dark:text-rose-400"}`}>
+              {savingsRate} %
+            </p>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Budget Alerts */}
@@ -457,6 +543,71 @@ export default function Home() {
                 </div>
               </div>
             ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Smart Advice */}
+      {advices.length > 0 && (
+        <Card className={advices[0]?.severity === "critical" ? "border-rose-500/30" : "border-amber-500/30"}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Conseils du mois
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {advices.slice(0, 3).map((a) => (
+              <div key={a.id} className={`flex items-start gap-2 text-sm p-2 rounded-lg ${
+                a.severity === "critical" ? "bg-rose-500/10 text-rose-700 dark:text-rose-300" :
+                a.severity === "warning" ? "bg-amber-500/10 text-amber-700 dark:text-amber-300" :
+                a.severity === "good" ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" :
+                "bg-blue-500/10 text-blue-700 dark:text-blue-300"
+              }`}>
+                {a.severity === "critical" ? <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" /> : 
+                 a.severity === "warning" ? <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" /> :
+                 a.severity === "good" ? <CheckCircle2 className="h-4 w-4 mt-0.5 shrink-0" /> :
+                 <Info className="h-4 w-4 mt-0.5 shrink-0" />}
+                <span>{a.text}</span>
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Subscriptions Summary */}
+      {activeSubs.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Repeat className="h-4 w-4 text-primary" />
+              Abonnements ({activeSubs.length} actifs)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-sm text-muted-foreground">Total mensuel</span>
+              <span className="text-sm font-bold text-rose-500">{formatMoney(totalMonthlySubs)}</span>
+            </div>
+            <Progress value={totalIncome > 0 ? Math.min((totalMonthlySubs / totalIncome) * 100, 100) : 0} className="h-2" />
+            <div className="mt-3 space-y-1.5">
+              {activeSubs.slice(0, 4).map((sub) => (
+                <div key={sub.id} className="flex items-center justify-between text-xs">
+                  <span className="flex items-center gap-1.5">
+                    {sub.essential && <span className="text-amber-500">*</span>}
+                    {sub.name}
+                    {sub.frequency === "yearly" && <span className="text-muted-foreground">({formatMoney(sub.amount / 12)}/mois)</span>}
+                  </span>
+                  <span className="font-medium">{formatMoney(sub.frequency === "yearly" ? sub.amount / 12 : sub.amount)}</span>
+                </div>
+              ))}
+              {activeSubs.length > 4 && (
+                <p className="text-xs text-muted-foreground text-center">+ {activeSubs.length - 4} autres</p>
+              )}
+            </div>
+            {subscriptions.filter(s => !s.active).length > 0 && (
+              <p className="text-xs text-muted-foreground mt-2">{subscriptions.filter(s => !s.active).length} en pause</p>
+            )}
           </CardContent>
         </Card>
       )}
@@ -628,6 +779,15 @@ export default function Home() {
     date: new Date().toISOString().slice(0, 10),
     type: "ndf" as "ndf" | "bonus" | "other",
     note: "",
+  })
+
+  const [newSub, setNewSub] = useState({
+    name: "",
+    amount: "",
+    frequency: "monthly" as "monthly" | "yearly",
+    dayOfMonth: "1",
+    categoryId: "",
+    essential: false,
   })
 
   const renderAddExpense = () => (
@@ -834,6 +994,159 @@ export default function Home() {
         </CardContent>
       </Card>
 
+      {/* Subscriptions Management */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Repeat className="h-4 w-4 text-primary" />
+            Abonnements
+            {activeSubs.length > 0 && (
+              <Badge variant="secondary" className="ml-auto">{activeSubs.length}</Badge>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* Existing subscriptions list */}
+          {subscriptions.length > 0 && (
+            <div className="space-y-2">
+              {subscriptions.map((sub) => (
+                <div key={sub.id} className={`flex items-center justify-between p-2.5 rounded-lg border ${!sub.active ? "opacity-50" : ""}`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <Switch
+                      checked={sub.active}
+                      onCheckedChange={(checked) => toggleSubscription(sub.id!, checked)}
+                    />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{sub.name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {formatMoney(sub.frequency === "yearly" ? sub.amount / 12 : sub.amount)}/mois
+                        {sub.essential && " · Essentiel"}
+                        {sub.frequency === "yearly" && " · Annuel"}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <span className="text-sm font-semibold mr-2">{formatMoney(sub.amount)}</span>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-rose-500"
+                      onClick={() => deleteSubscriptionAction(sub.id!)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <Separator />
+          {/* Add subscription form */}
+          <p className="text-sm font-medium">Ajouter un abonnement</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2">
+              <Input
+                placeholder="Ex: Netflix, Spotify, Assurance..."
+                value={newSub.name}
+                onChange={(e) => setNewSub({ ...newSub, name: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Montant (€)</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="9,99"
+                value={newSub.amount}
+                onChange={(e) => setNewSub({ ...newSub, amount: e.target.value })}
+              />
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Fréquence</Label>
+              <Select
+                value={newSub.frequency}
+                onValueChange={(v) => setNewSub({ ...newSub, frequency: v as "monthly" | "yearly" })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="monthly">Mensuel</SelectItem>
+                  <SelectItem value="yearly">Annuel</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Jour de prélèvement</Label>
+              <Select
+                value={newSub.dayOfMonth}
+                onValueChange={(v) => setNewSub({ ...newSub, dayOfMonth: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                    <SelectItem key={d} value={String(d)}>{d}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="text-xs text-muted-foreground">Catégorie</Label>
+              <Select
+                value={newSub.categoryId}
+                onValueChange={(v) => setNewSub({ ...newSub, categoryId: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Optionnelle" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Aucune</SelectItem>
+                  {categories.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newSub.essential}
+                onChange={(e) => setNewSub({ ...newSub, essential: e.target.checked })}
+                className="rounded"
+              />
+              Essentiel (loyer, assurance...)
+            </label>
+          </div>
+          <Button
+            size="sm"
+            className="w-full"
+            onClick={() => {
+              if (!newSub.name || !newSub.amount) {
+                toast.error("Nom et montant requis")
+                return
+              }
+              addSubscriptionAction({
+                name: newSub.name,
+                amount: parseFloat(newSub.amount),
+                frequency: newSub.frequency,
+                dayOfMonth: parseInt(newSub.dayOfMonth),
+                categoryId: newSub.categoryId === "none" ? null : newSub.categoryId || null,
+                essential: newSub.essential,
+              })
+              setNewSub({ name: "", amount: "", frequency: "monthly", dayOfMonth: "1", categoryId: "", essential: false })
+            }}
+          >
+            <PlusCircle className="h-4 w-4 mr-1" />
+            Ajouter l'abonnement
+          </Button>
+        </CardContent>
+      </Card>
+
       {/* CSV Import */}
       <Card>
         <CardHeader>
@@ -1008,60 +1321,94 @@ export default function Home() {
         <CardContent className="p-0">
           {expenses.length > 0 ? (
             <ScrollArea className="max-h-[500px]">
-              <div className="divide-y">
-                {expenses.map((expense) => (
-                  <div
-                    key={expense.id}
-                    className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div
-                        className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold text-white shrink-0"
-                        style={{
-                          backgroundColor: expense.category?.color || "#64748b",
-                        }}
-                      >
-                        {expense.description.charAt(0).toUpperCase()}
+              <div>
+                {(() => {
+                  // Group expenses by day
+                  const grouped: { date: string; items: Expense[] }[] = []
+                  for (const exp of expenses) {
+                    const day = exp.date.slice(0, 10)
+                    const last = grouped[grouped.length - 1]
+                    if (last && last.date === day) {
+                      last.items.push(exp)
+                    } else {
+                      grouped.push({ date: day, items: [exp] })
+                    }
+                  }
+                  return grouped.map((group) => {
+                    const dayTotal = group.items.reduce((s, e) => s + e.amount, 0)
+                    return (
+                      <div key={group.date}>
+                        <div className="flex items-center justify-between px-4 py-2 bg-muted/50 sticky top-0 z-10">
+                          <span className="text-xs font-medium text-muted-foreground">
+                            {formatDate(group.items[0].date)}
+                          </span>
+                          <span className="text-xs font-semibold text-rose-500">
+                            -{formatMoney(dayTotal)}
+                          </span>
+                        </div>
+                        <div className="divide-y">
+                          {group.items.map((expense) => (
+                            <div
+                              key={expense.id}
+                              className="flex items-center justify-between p-4 hover:bg-muted/50 transition-colors"
+                            >
+                              <div className="flex items-center gap-3 min-w-0">
+                                <div
+                                  className="w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold text-white shrink-0"
+                                  style={{ backgroundColor: expense.category?.color || "#64748b" }}
+                                >
+                                  {expense.description.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-sm font-medium truncate">
+                                    {expense.description}
+                                    {expense.subscriptionId && (
+                                      <span className="ml-1.5 text-[10px] bg-primary/10 text-primary px-1.5 py-0.5 rounded-full">auto</span>
+                                    )}
+                                  </p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {expense.category?.name || "Non catégorisé"}
+                                    {expense.note === "Prélèvement automatique" && " · Abonnement"}
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <p className="text-sm font-semibold text-rose-500 min-w-[70px] text-right">
+                                  -{formatMoney(expense.amount)}
+                                </p>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8"
+                                  onClick={() => {
+                                    setEditExpense(expense)
+                                    setEditForm({
+                                      amount: String(expense.amount),
+                                      description: expense.description,
+                                      date: expense.date.slice(0, 10),
+                                      categoryId: expense.categoryId || "",
+                                      note: expense.note || "",
+                                    })
+                                  }}
+                                >
+                                  <Edit2 className="h-3.5 w-3.5" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-rose-500 hover:text-rose-600"
+                                  onClick={() => setDeleteId(expense.id)}
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium truncate">{expense.description}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {expense.category?.name || "Non catégorisé"} · {formatDate(expense.date)}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <p className="text-sm font-semibold text-rose-500 min-w-[70px] text-right">
-                        -{formatMoney(expense.amount)}
-                      </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8"
-                        onClick={() => {
-                          setEditExpense(expense)
-                          setEditForm({
-                            amount: String(expense.amount),
-                            description: expense.description,
-                            date: expense.date.slice(0, 10),
-                            categoryId: expense.categoryId || "",
-                            note: expense.note || "",
-                          })
-                        }}
-                      >
-                        <Edit2 className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-rose-500 hover:text-rose-600"
-                        onClick={() => setDeleteId(expense.id)}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                    )
+                  })
+                })()}
               </div>
             </ScrollArea>
           ) : (
@@ -1477,6 +1824,8 @@ export default function Home() {
   const [settingsForm, setSettingsForm] = useState({
     monthlySalary: "0",
     monthlySavings: "0",
+    monthStartDay: "1",
+    largeExpenseAlert: "50",
   })
   const [newCat, setNewCat] = useState({ name: "", color: "#64748b" })
 
@@ -1486,8 +1835,10 @@ export default function Home() {
     if (!settings || settingsInitialized) return
     queueMicrotask(() => {
       setSettingsForm({
-        monthlySalary: String(settings.monthlySalary),
-        monthlySavings: String(settings.monthlySavings),
+        monthlySalary: String(settings.monthlySalary || 0),
+        monthlySavings: String(settings.monthlySavings || 0),
+        monthStartDay: String(settings.monthStartDay || 1),
+        largeExpenseAlert: String(settings.largeExpenseAlert || 50),
       })
       setSettingsInitialized(true)
     })
@@ -1526,6 +1877,7 @@ export default function Home() {
       setSettings(data.settings)
       setCategories(data.categories)
       setSavingsGoals(data.savingsGoals)
+      setSubscriptions(data.subscriptions || [])
       // Rebuild expenses with categories attached
       const catMap = new Map(data.categories.map((c) => [c.id, c]))
       const expsWithCat = data.expenses.map((e) => ({
@@ -1589,11 +1941,44 @@ export default function Home() {
               placeholder="200"
             />
           </div>
+          <div className="space-y-2">
+            <Label>Jour de début du mois budgétaire</Label>
+            <Select
+              value={settingsForm.monthStartDay}
+              onValueChange={(v) => setSettingsForm({ ...settingsForm, monthStartDay: v })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="1">1 du mois (classique)</SelectItem>
+                <SelectItem value="15">15 du mois</SelectItem>
+                <SelectItem value="25">25 du mois</SelectItem>
+                <SelectItem value="27">27 du mois</SelectItem>
+                <SelectItem value="28">28 du mois</SelectItem>
+                <SelectItem value="30">30 du mois</SelectItem>
+                <SelectItem value="31">Dernier jour du mois</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">Définir le jour où votre mois budgétaire commence (ex: jour de paie)</p>
+          </div>
+          <div className="space-y-2">
+            <Label>Alerte grosse dépense (€)</Label>
+            <Input
+              type="number"
+              value={settingsForm.largeExpenseAlert}
+              onChange={(e) => setSettingsForm({ ...settingsForm, largeExpenseAlert: e.target.value })}
+              placeholder="50"
+            />
+            <p className="text-xs text-muted-foreground">Seuil au-dessus duquel une dépense déclenche une alerte (0 = désactivé)</p>
+          </div>
           <Button
             onClick={() =>
               updateSettings({
                 monthlySalary: parseFloat(settingsForm.monthlySalary) || 0,
                 monthlySavings: parseFloat(settingsForm.monthlySavings) || 0,
+                monthStartDay: parseInt(settingsForm.monthStartDay) || 1,
+                largeExpenseAlert: parseFloat(settingsForm.largeExpenseAlert) || 0,
               })
             }
           >
@@ -1772,6 +2157,8 @@ export default function Home() {
               setSettings(s)
               setCategories(c)
               setSavingsGoals([])
+              setSubscriptions([])
+              setAdvices([])
               setAllMonthExpenses([])
               setAllMonthIncomes([])
               setExpenses([])
