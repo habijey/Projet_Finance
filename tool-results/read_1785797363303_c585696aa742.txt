@@ -1,0 +1,880 @@
+     1→import { openDB, type DBSchema, type IDBPDatabase } from "idb"
+     2→
+     3→// ─── Types ───────────────────────────────────────────
+     4→
+     5→export interface Settings {
+     6→  id?: string
+     7→  monthlySalary: number
+     8→  monthlySavings: number
+     9→  currency: string
+    10→  monthStartDay: number
+    11→  largeExpenseAlert: number
+    12→}
+    13→
+    14→export interface Category {
+    15→  id?: string
+    16→  name: string
+    17→  icon: string
+    18→  color: string
+    19→  budgetLimit: number
+    20→  isDefault: boolean
+    21→  sortOrder: number
+    22→}
+    23→
+    24→export interface Expense {
+    25→  id?: string
+    26→  amount: number
+    27→  description: string
+    28→  date: string // ISO string
+    29→  categoryId?: string
+    30→  category?: Category | null
+    31→  note?: string | null
+    32→  subscriptionId?: string | null
+    33→  occurrence?: string | null
+    34→  createdAt?: string
+    35→  updatedAt?: string
+    36→}
+    37→
+    38→export interface SavingsGoal {
+    39→  id?: string
+    40→  name: string
+    41→  targetAmount: number
+    42→  currentAmount: number
+    43→  deadline?: string | null
+    44→  color: string
+    45→  createdAt?: string
+    46→  updatedAt?: string
+    47→}
+    48→
+    49→export interface Income {
+    50→  id?: string
+    51→  amount: number
+    52→  description: string
+    53→  date: string // ISO string
+    54→  type: "ndf" | "bonus" | "other"
+    55→  note?: string | null
+    56→  createdAt?: string
+    57→  updatedAt?: string
+    58→}
+    59→
+    60→export interface Subscription {
+    61→  id?: string
+    62→  name: string
+    63→  amount: number
+    64→  frequency: "monthly" | "yearly"
+    65→  dayOfMonth: number
+    66→  categoryId?: string | null
+    67→  essential: boolean
+    68→  active: boolean
+    69→  createdAt?: string
+    70→  updatedAt?: string
+    71→}
+    72→
+    73→// ─── DB Schema ──────────────────────────────────────
+    74→
+    75→interface MesDepensesDB extends DBSchema {
+    76→  settings: {
+    77→    key: string
+    78→    value: Settings
+    79→  }
+    80→  categories: {
+    81→    key: string
+    82→    value: Category
+    83→    indexes: { "by-name": string }
+    84→  }
+    85→  expenses: {
+    86→    key: string
+    87→    value: Expense
+    88→    indexes: { "by-date": string; "by-category": string }
+    89→  }
+    90→  savingsGoals: {
+    91→    key: string
+    92→    value: SavingsGoal
+    93→  }
+    94→  incomes: {
+    95→    key: string
+    96→    value: Income
+    97→    indexes: { "by-date": string }
+    98→  }
+    99→  subscriptions: {
+   100→    key: string
+   101→    value: Subscription
+   102→    indexes: { "by-active": string }
+   103→  }
+   104→}
+   105→
+   106→// ─── Default categories ───────────────────────────────
+   107→
+   108→const DEFAULT_CATEGORIES: Omit<Category, "id">[] = [
+   109→  { name: "Alimentation", icon: "ShoppingCart", color: "#10b981", budgetLimit: 0, isDefault: true, sortOrder: 0 },
+   110→  { name: "Transport", icon: "Car", color: "#f59e0b", budgetLimit: 0, isDefault: true, sortOrder: 1 },
+   111→  { name: "Logement", icon: "Home", color: "#8b5cf6", budgetLimit: 0, isDefault: true, sortOrder: 2 },
+   112→  { name: "Loisirs", icon: "Gamepad2", color: "#ec4899", budgetLimit: 0, isDefault: true, sortOrder: 3 },
+   113→  { name: "Santé", icon: "Heart", color: "#06b6d4", budgetLimit: 0, isDefault: true, sortOrder: 4 },
+   114→  { name: "Shopping", icon: "Shirt", color: "#f97316", budgetLimit: 0, isDefault: true, sortOrder: 5 },
+   115→  { name: "Éducation", icon: "BookOpen", color: "#84cc16", budgetLimit: 0, isDefault: true, sortOrder: 6 },
+   116→  { name: "Abonnements", icon: "Smartphone", color: "#14b8a6", budgetLimit: 0, isDefault: true, sortOrder: 7 },
+   117→  { name: "Restaurants", icon: "UtensilsCrossed", color: "#eab308", budgetLimit: 0, isDefault: true, sortOrder: 8 },
+   118→  { name: "Autre", icon: "CircleDot", color: "#64748b", budgetLimit: 0, isDefault: true, sortOrder: 9 },
+   119→]
+   120→
+   121→// ─── UID generator ──────────────────────────────────
+   122→
+   123→function uid(): string {
+   124→  return Date.now().toString(36) + Math.random().toString(36).slice(2, 9)
+   125→}
+   126→
+   127→// ─── DB singleton ───────────────────────────────────
+   128→
+   129→let dbPromise: Promise<IDBPDatabase<MesDepensesDB>> | null = null
+   130→
+   131→function getDB() {
+   132→  if (!dbPromise) {
+   133→    dbPromise = openDB<MesDepensesDB>("mesdepenses-db", 2, {
+   134→      upgrade(db, oldVersion) {
+   135→        if (!db.objectStoreNames.contains("settings")) {
+   136→          db.createObjectStore("settings", { keyPath: "id" })
+   137→        }
+   138→        if (!db.objectStoreNames.contains("categories")) {
+   139→          const catStore = db.createObjectStore("categories", { keyPath: "id" })
+   140→          catStore.createIndex("by-name", "name", { unique: true })
+   141→        }
+   142→        if (!db.objectStoreNames.contains("expenses")) {
+   143→          const expStore = db.createObjectStore("expenses", { keyPath: "id" })
+   144→          expStore.createIndex("by-date", "date")
+   145→          expStore.createIndex("by-category", "categoryId")
+   146→        }
+   147→        if (!db.objectStoreNames.contains("savingsGoals")) {
+   148→          db.createObjectStore("savingsGoals", { keyPath: "id" })
+   149→        }
+   150→        if (!db.objectStoreNames.contains("incomes")) {
+   151→          const incStore = db.createObjectStore("incomes", { keyPath: "id" })
+   152→          incStore.createIndex("by-date", "date")
+   153→        }
+   154→        if (!db.objectStoreNames.contains("subscriptions")) {
+   155→          const subStore = db.createObjectStore("subscriptions", { keyPath: "id" })
+   156→          subStore.createIndex("by-active", "active")
+   157→        }
+   158→      },
+   159→    })
+   160→  }
+   161→  return dbPromise
+   162→}
+   163→
+   164→// ─── Seed ───────────────────────────────────────────
+   165→
+   166→export async function seedDB(): Promise<{ settings: Settings; categories: Category[] }> {
+   167→  const db = await getDB()
+   168→
+   169→  // Seed settings
+   170→  let settings = await db.get("settings", "main")
+   171→  if (!settings) {
+   172→    settings = {
+   173→      id: "main",
+   174→      monthlySalary: 0,
+   175→      monthlySavings: 0,
+   176→      currency: "EUR",
+   177→      monthStartDay: 1,
+   178→      largeExpenseAlert: 50,
+   179→    }
+   180→    await db.put("settings", settings)
+   181→  }
+   182→
+   183→  // Seed categories
+   184→  let categories = await db.getAll("categories")
+   185→  if (categories.length === 0) {
+   186→    for (const cat of DEFAULT_CATEGORIES) {
+   187→      const withId = { ...cat, id: uid() }
+   188→      await db.put("categories", withId)
+   189→    }
+   190→    categories = await db.getAll("categories")
+   191→  }
+   192→
+   193→  return { settings: settings!, categories }
+   194→}
+   195→
+   196→// ─── Settings ───────────────────────────────────────
+   197→
+   198→export async function getSettings(): Promise<Settings> {
+   199→  const db = await getDB()
+   200→  let settings = await db.get("settings", "main")
+   201→  if (!settings) {
+   202→    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
+   203→    await db.put("settings", settings)
+   204→  }
+   205→  return settings!
+   206→}
+   207→
+   208→export async function updateSettings(data: Partial<Settings>): Promise<Settings> {
+   209→  const db = await getDB()
+   210→  let settings = await db.get("settings", "main")
+   211→  if (!settings) {
+   212→    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
+   213→  }
+   214→  const updated = { ...settings, ...data }
+   215→  await db.put("settings", updated)
+   216→  return updated
+   217→}
+   218→
+   219→// ─── Categories ─────────────────────────────────────
+   220→
+   221→export async function getCategories(): Promise<Category[]> {
+   222→  const db = await getDB()
+   223→  const categories = await db.getAll("categories")
+   224→  return categories.sort((a, b) => a.sortOrder - b.sortOrder)
+   225→}
+   226→
+   227→export async function addCategory(data: Omit<Category, "id">): Promise<Category> {
+   228→  const db = await getDB()
+   229→  const maxOrder = await db.getAll("categories")
+   230→  const category: Category = {
+   231→    ...data,
+   232→    id: uid(),
+   233→    sortOrder: maxOrder.length > 0 ? Math.max(...maxOrder.map((c) => c.sortOrder)) + 1 : 0,
+   234→  }
+   235→  await db.put("categories", category)
+   236→  return category
+   237→}
+   238→
+   239→export async function updateCategory(id: string, data: Partial<Category>): Promise<Category> {
+   240→  const db = await getDB()
+   241→  const existing = await db.get("categories", id)
+   242→  if (!existing) throw new Error("Catégorie introuvable")
+   243→  const updated = { ...existing, ...data }
+   244→  await db.put("categories", updated)
+   245→  return updated
+   246→}
+   247→
+   248→export async function deleteCategory(id: string): Promise<void> {
+   249→  const db = await getDB()
+   250→  // Also nullify categoryId on expenses
+   251→  const tx = db.transaction(["categories", "expenses"], "readwrite")
+   252→  await tx.objectStore("categories").delete(id)
+   253→  // Update expenses that reference this category
+   254→  const expenses = await tx.objectStore("expenses").index("by-category").getAll(id)
+   255→  for (const exp of expenses) {
+   256→    exp.categoryId = undefined
+   257→    exp.category = null
+   258→    await tx.objectStore("expenses").put(exp)
+   259→  }
+   260→  await tx.done
+   261→}
+   262→
+   263→// ─── Expenses ────────────────────────────────────────
+   264→
+   265→export async function getExpenses(opts?: {
+   266→  month?: string
+   267→  categoryId?: string
+   268→  search?: string
+   269→  minAmount?: number
+   270→  maxAmount?: number
+   271→  sortBy?: "date" | "amount"
+   272→  sortOrder?: "asc" | "desc"
+   273→}): Promise<Expense[]> {
+   274→  const db = await getDB()
+   275→  let expenses = await db.getAll("expenses")
+   276→
+   277→  // Filter by month
+   278→  if (opts?.month) {
+   279→    const [year, month] = opts.month.split("-").map(Number)
+   280→    const startDate = new Date(year, month - 1, 1).getTime()
+   281→    const endDate = new Date(year, month, 0, 23, 59, 59, 999).getTime()
+   282→    expenses = expenses.filter((e) => {
+   283→      const t = new Date(e.date).getTime()
+   284→      return t >= startDate && t <= endDate
+   285→    })
+   286→  }
+   287→
+   288→  // Filter by category
+   289→  if (opts?.categoryId) {
+   290→    expenses = expenses.filter((e) => e.categoryId === opts.categoryId)
+   291→  }
+   292→
+   293→  // Search
+   294→  if (opts?.search) {
+   295→    const q = opts.search.toLowerCase()
+   296→    expenses = expenses.filter(
+   297→      (e) => e.description.toLowerCase().includes(q) || (e.note?.toLowerCase().includes(q))
+   298→    )
+   299→  }
+   300→
+   301→  // Amount range
+   302→  if (opts?.minAmount !== undefined) {
+   303→    expenses = expenses.filter((e) => e.amount >= opts.minAmount!)
+   304→  }
+   305→  if (opts?.maxAmount !== undefined) {
+   306→    expenses = expenses.filter((e) => e.amount <= opts.maxAmount!)
+   307→  }
+   308→
+   309→  // Sort
+   310→  const sortBy = opts?.sortBy || "date"
+   311→  const sortOrder = opts?.sortOrder || "desc"
+   312→  expenses.sort((a, b) => {
+   313→    const aVal = sortBy === "date" ? new Date(a.date).getTime() : a.amount
+   314→    const bVal = sortBy === "date" ? new Date(b.date).getTime() : b.amount
+   315→    return sortOrder === "asc" ? aVal - bVal : bVal - aVal
+   316→  })
+   317→
+   318→  // Attach category objects
+   319→  const categories = await db.getAll("categories")
+   320→  const catMap = new Map(categories.map((c) => [c.id, c]))
+   321→  for (const e of expenses) {
+   322→    e.category = e.categoryId ? catMap.get(e.categoryId) || null : null
+   323→  }
+   324→
+   325→  return expenses
+   326→}
+   327→
+   328→export async function addExpense(data: {
+   329→  amount: number
+   330→  description: string
+   331→  date: string
+   332→  categoryId?: string | null
+   333→  note?: string | null
+   334→}): Promise<Expense> {
+   335→  const db = await getDB()
+   336→  const now = new Date().toISOString()
+   337→  const expense: Expense = {
+   338→    ...data,
+   339→    id: uid(),
+   340→    createdAt: now,
+   341→    updatedAt: now,
+   342→  }
+   343→  await db.put("expenses", expense)
+   344→
+   345→  // Attach category
+   346→  if (expense.categoryId) {
+   347→    expense.category = await db.get("categories", expense.categoryId) || null
+   348→  }
+   349→
+   350→  return expense
+   351→}
+   352→
+   353→export async function updateExpense(id: string, data: Partial<Expense>): Promise<Expense> {
+   354→  const db = await getDB()
+   355→  const existing = await db.get("expenses", id)
+   356→  if (!existing) throw new Error("Dépense introuvable")
+   357→  const updated: Expense = { ...existing, ...data, updatedAt: new Date().toISOString() }
+   358→  await db.put("expenses", updated)
+   359→
+   360→  if (updated.categoryId) {
+   361→    updated.category = await db.get("categories", updated.categoryId) || null
+   362→  }
+   363→
+   364→  return updated
+   365→}
+   366→
+   367→export async function deleteExpense(id: string): Promise<void> {
+   368→  const db = await getDB()
+   369→  await db.delete("expenses", id)
+   370→}
+   371→
+   372→// ─── Savings Goals ──────────────────────────────────
+   373→
+   374→export async function getSavingsGoals(): Promise<SavingsGoal[]> {
+   375→  const db = await getDB()
+   376→  return db.getAll("savingsGoals")
+   377→}
+   378→
+   379→export async function addSavingsGoal(data: {
+   380→  name: string
+   381→  targetAmount: number
+   382→  currentAmount?: number
+   383→  deadline?: string | null
+   384→  color?: string
+   385→}): Promise<SavingsGoal> {
+   386→  const db = await getDB()
+   387→  const now = new Date().toISOString()
+   388→  const goal: SavingsGoal = {
+   389→    name: data.name,
+   390→    targetAmount: data.targetAmount,
+   391→    currentAmount: data.currentAmount || 0,
+   392→    deadline: data.deadline || null,
+   393→    color: data.color || "#10b981",
+   394→    id: uid(),
+   395→    createdAt: now,
+   396→    updatedAt: now,
+   397→  }
+   398→  await db.put("savingsGoals", goal)
+   399→  return goal
+   400→}
+   401→
+   402→export async function updateSavingsGoal(id: string, data: Partial<SavingsGoal>): Promise<SavingsGoal> {
+   403→  const db = await getDB()
+   404→  const existing = await db.get("savingsGoals", id)
+   405→  if (!existing) throw new Error("Objectif introuvable")
+   406→  const updated: SavingsGoal = { ...existing, ...data, updatedAt: new Date().toISOString() }
+   407→  await db.put("savingsGoals", updated)
+   408→  return updated
+   409→}
+   410→
+   411→export async function deleteSavingsGoal(id: string): Promise<void> {
+   412→  const db = await getDB()
+   413→  await db.delete("savingsGoals", id)
+   414→}
+   415→
+   416→// ─── Incomes ─────────────────────────────────────────
+   417→
+   418→export async function getIncomes(opts?: {
+   419→  month?: string
+   420→  sortBy?: "date" | "amount"
+   421→  sortOrder?: "asc" | "desc"
+   422→}): Promise<Income[]> {
+   423→  const db = await getDB()
+   424→  let incomes = await db.getAll("incomes")
+   425→
+   426→  if (opts?.month) {
+   427→    const [year, month] = opts.month.split("-").map(Number)
+   428→    const startDate = new Date(year, month - 1, 1).getTime()
+   429→    const endDate = new Date(year, month, 0, 23, 59, 59, 999).getTime()
+   430→    incomes = incomes.filter((i) => {
+   431→      const t = new Date(i.date).getTime()
+   432→      return t >= startDate && t <= endDate
+   433→    })
+   434→  }
+   435→
+   436→  const sortBy = opts?.sortBy || "date"
+   437→  const sortOrder = opts?.sortOrder || "desc"
+   438→  incomes.sort((a, b) => {
+   439→    const aVal = sortBy === "date" ? new Date(a.date).getTime() : a.amount
+   440→    const bVal = sortBy === "date" ? new Date(b.date).getTime() : b.amount
+   441→    return sortOrder === "asc" ? aVal - bVal : bVal - aVal
+   442→  })
+   443→
+   444→  return incomes
+   445→}
+   446→
+   447→export async function addIncome(data: {
+   448→  amount: number
+   449→  description: string
+   450→  date: string
+   451→  type: "ndf" | "bonus" | "other"
+   452→  note?: string | null
+   453→}): Promise<Income> {
+   454→  const db = await getDB()
+   455→  const now = new Date().toISOString()
+   456→  const income: Income = {
+   457→    ...data,
+   458→    id: uid(),
+   459→    createdAt: now,
+   460→    updatedAt: now,
+   461→  }
+   462→  await db.put("incomes", income)
+   463→  return income
+   464→}
+   465→
+   466→export async function updateIncome(id: string, data: Partial<Income>): Promise<Income> {
+   467→  const db = await getDB()
+   468→  const existing = await db.get("incomes", id)
+   469→  if (!existing) throw new Error("Revenu introuvable")
+   470→  const updated: Income = { ...existing, ...data, updatedAt: new Date().toISOString() }
+   471→  await db.put("incomes", updated)
+   472→  return updated
+   473→}
+   474→
+   475→export async function deleteIncome(id: string): Promise<void> {
+   476→  const db = await getDB()
+   477→  await db.delete("incomes", id)
+   478→}
+   479→
+   480→// ─── Subscriptions ────────────────────────────────
+   481→
+   482→export async function getSubscriptions(): Promise<Subscription[]> {
+   483→  const db = await getDB()
+   484→  return db.getAll("subscriptions")
+   485→}
+   486→
+   487→export async function addSubscription(data: {
+   488→  name: string
+   489→  amount: number
+   490→  frequency: "monthly" | "yearly"
+   491→  dayOfMonth: number
+   492→  categoryId?: string | null
+   493→  essential?: boolean
+   494→}): Promise<Subscription> {
+   495→  const db = await getDB()
+   496→  const now = new Date().toISOString()
+   497→  const sub: Subscription = {
+   498→    ...data,
+   499→    essential: data.essential ?? false,
+   500→    active: true,
+   501→    id: uid(),
+   502→    createdAt: now,
+   503→    updatedAt: now,
+   504→  }
+   505→  await db.put("subscriptions", sub)
+   506→  return sub
+   507→}
+   508→
+   509→export async function updateSubscription(id: string, data: Partial<Subscription>): Promise<Subscription> {
+   510→  const db = await getDB()
+   511→  const existing = await db.get("subscriptions", id)
+   512→  if (!existing) throw new Error("Abonnement introuvable")
+   513→  const updated: Subscription = { ...existing, ...data, updatedAt: new Date().toISOString() }
+   514→  await db.put("subscriptions", updated)
+   515→  return updated
+   516→}
+   517→
+   518→export async function deleteSubscription(id: string): Promise<void> {
+   519→  const db = await getDB()
+   520→  await db.delete("subscriptions", id)
+   521→}
+   522→
+   523→// Generate pending subscription expenses (call on app init)
+   524→export async function generateSubscriptionExpenses(): Promise<Expense[]> {
+   525→  const db = await getDB()
+   526→  const subscriptions = await db.getAll("subscriptions")
+   527→  const allExpenses = await db.getAll("expenses")
+   528→  const today = new Date().toISOString().slice(0, 10)
+   529→  // Track which (subscriptionId:occurrence) combos already exist
+   530→  const done = new Set(
+   531→    allExpenses
+   532→      .filter((e: any) => e.subscriptionId && e.occurrence)
+   533→      .map((e: any) => `${e.subscriptionId}:${e.occurrence}`)
+   534→  )
+   535→  const created: Expense[] = []
+   536→  const tx = db.transaction("expenses", "readwrite")
+   537→  for (const sub of subscriptions) {
+   538→    if (!sub.active) continue
+   539→    const startIso = (sub.createdAt || now).slice(0, 10)
+   540→    const occurrences = dueOccurrences(sub, startIso, today)
+   541→    for (const occ of occurrences) {
+   542→      if (done.has(`${sub.id}:${occ}`)) continue
+   543→      const now = new Date().toISOString()
+   544→      const expense: Expense = {
+   545→        id: uid(),
+   546→        amount: sub.amount,
+   547→        description: sub.name,
+   548→        date: new Date(occ).toISOString(),
+   549→        categoryId: sub.categoryId || undefined,
+   550→        category: null,
+   551→        note: "Prélèvement automatique",
+   552→        createdAt: now,
+   553→        updatedAt: now,
+   554→        subscriptionId: sub.id,
+   555→        occurrence: occ,
+   556→      }
+   557→      await tx.store.put(expense)
+   558→      created.push(expense)
+   559→    }
+   560→  }
+   561→  await tx.done()
+   562→  return created
+   563→}
+   564→
+   565→function dueOccurrences(sub: Subscription, fromIso: string, toIso: string): string[] {
+   566→  if (fromIso > toIso) return []
+   567→  const [fy, fm] = fromIso.split("-").map(Number)
+   568→  const [ty, tm] = toIso.split("-").map(Number)
+   569→  const yearly = sub.frequency === "yearly"
+   570→  const out: string[] = []
+   571→  for (let index = fy * 12 + (fm - 1); index <= ty * 12 + (tm - 1); index++) {
+   572→    const year = Math.floor(index / 12)
+   573→    const month = (index % 12) + 1
+   574→    const daysInMonth = new Date(year, month, 0).getDate()
+   575→    const day = Math.min(sub.dayOfMonth, daysInMonth)
+   576→    const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
+   577→    if (date < fromIso || date > toIso) continue
+   578→    if (date > today) continue
+   579→    out.push(date)
+   580→  }
+   581→  return out
+   582→}
+   583→
+   584→// ─── CSV Import ─────────────────────────────────────
+   585→
+   586→export async function importCSV(text: string): Promise<{ imported: number; errors: string[]; total: number }> {
+   587→  const db = await getDB()
+   588→  const categories = await db.getAll("categories")
+   589→  const catMap = new Map(categories.map((c) => [c.name.toLowerCase(), c]))
+   590→
+   591→  const lines = text.split("\n").filter((l) => l.trim())
+   592→  let imported = 0
+   593→  const errors: string[] = []
+   594→
+   595→  const tx = db.transaction("expenses", "readwrite")
+   596→
+   597→  for (let i = 1; i < lines.length; i++) {
+   598→    const line = lines[i].trim()
+   599→    if (!line) continue
+   600→
+   601→    // Try semicolon then comma
+   602→    let parts = line.split(";").map((p) => p.trim().replace(/^"|"$/g, ""))
+   603→    if (parts.length < 3) {
+   604→      parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""))
+   605→    }
+   606→    if (parts.length < 3) {
+   607→      errors.push(`Ligne ${i + 1}: format invalide`)
+   608→      continue
+   609→    }
+   610→
+   611→    const dateStr = parts[0]
+   612→    const description = parts[1]
+   613→    const amountStr = parts[2].replace(",", ".").replace(/[^\d.\-]/g, "")
+   614→    const categoryName = parts[3] || ""
+   615→
+   616→    const amount = parseFloat(amountStr)
+   617→    if (isNaN(amount)) {
+   618→      errors.push(`Ligne ${i + 1}: montant invalide "${parts[2]}"`)
+   619→      continue
+   620→    }
+   621→
+   622→    let date: Date
+   623→    const dmy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+   624→    if (dmy) {
+   625→      date = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]))
+   626→    } else {
+   627→      const ymd = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+   628→      if (ymd) {
+   629→        date = new Date(parseInt(ymd[1]), parseInt(ymd[2]) - 1, parseInt(ymd[3]))
+   630→      } else {
+   631→        date = new Date()
+   632→      }
+   633→    }
+   634→
+   635→    const cat = categoryName ? catMap.get(categoryName.toLowerCase()) : undefined
+   636→    const now = new Date().toISOString()
+   637→
+   638→    const expense: Expense = {
+   639→      id: uid(),
+   640→      amount: Math.abs(amount),
+   641→      description,
+   642→      date: date.toISOString(),
+   643→      categoryId: cat?.id,
+   644→      category: cat || null,
+   645→      note: null,
+   646→      createdAt: now,
+   647→      updatedAt: now,
+   648→    }
+   649→    await tx.store.put(expense)
+   650→    imported++
+   651→  }
+   652→
+   653→  await tx.done
+   654→  return { imported, errors, total: lines.length - 1 }
+   655→}
+   656→
+   657→// ─── CSV Export ─────────────────────────────────────
+   658→
+   659→export async function exportCSV(): Promise<string> {
+   660→  const expenses = await getExpenses({ sortBy: "date", sortOrder: "desc" })
+   661→  const header = "Date;Description;Montant;Catégorie;Note"
+   662→  const rows = expenses.map(
+   663→    (e) =>
+   664→      `${new Date(e.date).toLocaleDateString("fr-FR")};${e.description};${e.amount.toFixed(2)};${e.category?.name || ""};${e.note || ""}`
+   665→  )
+   666→  return [header, ...rows].join("\n")
+   667→}
+   668→
+   669→// ─── Reset data ─────────────────────────────────────
+   670→
+   671→export async function resetData(): Promise<{ settings: Settings; categories: Category[] }> {
+   672→  const db = await getDB()
+   673→  await db.clear("expenses")
+   674→  await db.clear("savingsGoals")
+   675→  await db.clear("incomes")
+   676→  await db.clear("subscriptions")
+   677→  await db.clear("categories")
+   678→  await db.clear("settings")
+   679→  return seedDB()
+   680→}
+   681→
+   682→// ─── Full Backup (JSON) ────────────────────────────
+   683→
+   684→export interface BackupData {
+   685→  version: number
+   686→  exportedAt: string
+   687→  settings: Settings
+   688→  categories: Category[]
+   689→  expenses: Expense[]
+   690→  savingsGoals: SavingsGoal[]
+   691→  incomes: Income[]
+   692→  subscriptions: Subscription[]
+   693→}
+   694→
+   695→export async function exportFullBackup(): Promise<string> {
+   696→  const db = await getDB()
+   697→  const settings = (await db.get("settings", "main"))!
+   698→  const categories = await db.getAll("categories")
+   699→  const expenses = await db.getAll("expenses")
+   700→  const savingsGoals = await db.getAll("savingsGoals")
+   701→  const incomes = await db.getAll("incomes")
+   702→  const subscriptions = await db.getAll("subscriptions")
+   703→
+   704→  const backup: BackupData = {
+   705→    version: 1,
+   706→    exportedAt: new Date().toISOString(),
+   707→    settings,
+   708→    categories,
+   709→    expenses,
+   710→    savingsGoals,
+   711→    incomes,
+   712→    subscriptions,
+   713→  }
+   714→
+   715→  return JSON.stringify(backup, null, 2)
+   716→}
+   717→
+   718→export async function importFullBackup(jsonStr: string): Promise<{
+   719→  settings: Settings
+   720→  categories: Category[]
+   721→  expenses: Expense[]
+   722→  savingsGoals: SavingsGoal[]
+   723→  incomes: Income[]
+   724→  subscriptions: Subscription[]
+   725→}> {
+   726→  const backup: BackupData = JSON.parse(jsonStr)
+   727→
+   728→  if (!backup.version || !backup.settings || !backup.categories) {
+   729→    throw new Error("Fichier de sauvegarde invalide")
+   730→  }
+   731→
+   732→  const db = await getDB()
+   733→
+   734→  // Clear everything
+   735→  await db.clear("expenses")
+   736→  await db.clear("savingsGoals")
+   737→  await db.clear("categories")
+   738→  await db.clear("settings")
+   739→  await db.clear("subscriptions")
+   740→
+   741→  // Restore settings
+   742→  await db.put("settings", backup.settings)
+   743→
+   744→  // Restore categories (strip category from expenses to avoid FK issues)
+   745→  const expenses: Expense[] = (backup.expenses || []).map((e) => ({
+   746→    ...e,
+   747→    category: undefined,
+   748→  }))
+   749→  const categories: Category[] = backup.categories || []
+   750→
+   751→  // Restore savings goals
+   752→  const savingsGoals: SavingsGoal[] = backup.savingsGoals || []
+   753→  const incomes: Income[] = backup.incomes || []
+   754→  const subscriptions: Subscription[] = backup.subscriptions || []
+   755→
+   756→  // Write everything in a transaction
+   757→  const tx = db.transaction(["settings", "categories", "expenses", "savingsGoals", "incomes", "subscriptions"], "readwrite")
+   758→
+   759→  await tx.objectStore("settings").put(backup.settings)
+   760→  for (const cat of categories) {
+   761→    await tx.objectStore("categories").put(cat)
+   762→  }
+   763→  for (const exp of expenses) {
+   764→    await tx.objectStore("expenses").put(exp)
+   765→  }
+   766→  for (const goal of savingsGoals) {
+   767→    await tx.objectStore("savingsGoals").put(goal)
+   768→  }
+   769→  for (const inc of incomes) {
+   770→    await tx.objectStore("incomes").put(inc)
+   771→  }
+   772→  for (const sub of subscriptions) {
+   773→    await tx.objectStore("subscriptions").put(sub)
+   774→  }
+   775→
+   776→  await tx.done
+   777→
+   778→  return { settings: backup.settings, categories, expenses, savingsGoals, incomes, subscriptions }
+   779→}
+   780→
+   781→// ─── Smart Advice ────────────────────────────────
+   782→
+   783→export type AdviceSeverity = "critical" | "warning" | "info" | "good"
+   784→
+   785→export interface Advice {
+   786→  id: string
+   787→  severity: AdviceSeverity
+   788→  text: string
+   789→}
+   790→
+   791→export async function computeAdvice(
+   792→  categories: Category[],
+   793→  expenses: Expense[],
+   794→  incomes: Income[],
+   795→  settings: Settings
+   796→): Promise<Advice[]> {
+   797→  const advice: Advice[] = []
+   798→  const totalExpenses = expenses.reduce((s, e) => s + e.amount, 0)
+   799→  const totalIncomes = incomes.reduce((s, i) => s + i.amount, 0) + (settings.monthlySalary || 0)
+   800→
+   801→  // 1. Budget alerts
+   802→  for (const cat of categories) {
+   803→    if (cat.budgetLimit <= 0) continue
+   804→    const spent = expenses.filter((e) => e.categoryId === cat.id).reduce((s, e) => s + e.amount, 0)
+   805→    const pct = (spent / cat.budgetLimit) * 100
+   806→    if (pct >= 100) {
+   807→      advice.push({
+   808→        id: `over-${cat.id}`,
+   809→        severity: "critical",
+   810→        text: `Budget « ${cat.name} » dépassé : ${formatEUR(spent)} sur ${formatEUR(cat.budgetLimit)}.`,
+   811→      })
+   812→    } else if (pct >= 80) {
+   813→      advice.push({
+   814→        id: `warn-${cat.id}`,
+   815→        severity: "warning",
+   816→        text: `Budget « ${cat.name} » consommé à ${Math.round(pct)} %. Garde un œil.`,
+   817→      })
+   818→    }
+   819→  }
+   820→
+   821→  // 2. Negative savings
+   822→  if (totalIncomes > 0 && totalExpenses > totalIncomes) {
+   823→    const diff = totalExpenses - totalIncomes
+   824→    advice.push({
+   825→      id: "negative-savings",
+   826→      severity: "critical",
+   827→      text: `Ce mois, tu dépenses plus que tes revenus (${formatEUR(diff)} de plus).`,
+   828→    })
+   829→  }
+   830→
+   831→  // 3. Good savings
+   832→  if (totalIncomes > 0) {
+   833→    const rate = Math.round(((totalIncomes - totalExpenses) / totalIncomes) * 100)
+   834→    if (rate >= 20) {
+   835→      advice.push({
+   836→        id: "good-savings",
+   837→        severity: "good",
+   838→        text: `Beau taux d'épargne : ${rate} % de tes revenus mis de côté ce mois-ci.`,
+   839→      })
+   840→    }
+   841→  }
+   842→
+   843→  // 4. Suggest budget for top unbudgeted category
+   844→  const budgeted = new Set(categories.filter((c) => c.budgetLimit > 0).map((c) => c.id))
+   845→  const topUnbudgeted = categories
+   846→    .filter((c) => !budgeted.has(c.id))
+   847→    .map((c) => ({
+   848→      cat: c,
+   849→      total: expenses.filter((e) => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0),
+   850→    }))
+   851→    .filter((x) => x.total >= 50)
+   852→    .sort((a, b) => b.total - a.total)[0]
+   853→  if (topUnbudgeted) {
+   854→    advice.push({
+   855→      id: `suggest-${topUnbudgeted.cat.id}`,
+   856→      severity: "info",
+   857→      text: `« ${topUnbudgeted.cat.name} » représente ${formatEUR(topUnbudgeted.total)} ce mois sans budget défini.`,
+   858→    })
+   859→  }
+   860→
+   861→  // 5. Large expense alert
+   862→  if (settings.largeExpenseAlert > 0) {
+   863→    const largeExpenses = expenses.filter((e) => e.amount >= settings.largeExpenseAlert)
+   864→    if (largeExpenses.length > 0) {
+   865→      advice.push({
+   866→        id: "large-expenses",
+   867→        severity: "info",
+   868→        text: `${largeExpenses.length} dépense${largeExpenses.length > 1 ? "s" : ""} supérieure${largeExpenses.length > 1 ? "s" : ""} à ${formatEUR(settings.largeExpenseAlert)} ce mois.`,
+   869→      })
+   870→    }
+   871→  }
+   872→
+   873→  const order: Record<AdviceSeverity, number> = { critical: 0, warning: 1, info: 2, good: 3 }
+   874→  return advice.sort((a, b) => order[a.severity] - order[b.severity])
+   875→}
+   876→
+   877→function formatEUR(n: number): string {
+   878→  return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n)
+   879→}
+   880→
