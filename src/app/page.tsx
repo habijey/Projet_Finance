@@ -127,6 +127,12 @@ import {
   deleteSubscription as dbDeleteSubscription,
   generateSubscriptionExpenses as dbGenerateSubscriptionExpenses,
   computeAdvice as dbComputeAdvice,
+  getBudgetPeriod,
+  getExpensesForPeriod,
+  getIncomesForPeriod,
+  detectPayday,
+  type BudgetPeriod,
+  type PaydaySuggestion,
   type Income as DBIncome,
   type Settings as DBSettings,
   type Category as DBCategory,
@@ -198,6 +204,7 @@ export default function Home() {
   const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([])
   const [loading, setLoading] = useState(true)
   const [mounted] = useState(true)
+  const [paydaySuggestion, setPaydaySuggestion] = useState<PaydaySuggestion | null>(null)
 
   // ─── Load all data from IndexedDB on first load ───
   useEffect(() => {
@@ -211,26 +218,30 @@ export default function Home() {
         const goals = await dbGetSavingsGoals()
         if (cancelled) return
         setSavingsGoals(goals)
-        const monthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
-        if (cancelled) return
-        setAllMonthExpenses(monthExpenses)
-        const monthIncomes = await dbGetIncomes({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
-        if (cancelled) return
-        setAllMonthIncomes(monthIncomes)
         const subs = await dbGetSubscriptions()
         if (cancelled) return
         setSubscriptions(subs)
         // Auto-generate subscription expenses
-        const newExpenses = await dbGenerateSubscriptionExpenses()
-        let finalMonthExpenses = monthExpenses
-        if (newExpenses.length > 0 && !cancelled) {
-          finalMonthExpenses = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
-          setAllMonthExpenses(finalMonthExpenses)
-        }
+        await dbGenerateSubscriptionExpenses()
+        // Use budget period for dashboard data
+        const todayISO = new Date().toISOString().slice(0, 10)
+        const period = getBudgetPeriod(todayISO, s.monthStartDay || 1)
+        if (cancelled) return
+        const monthExpenses = await getExpensesForPeriod(period)
+        if (cancelled) return
+        setAllMonthExpenses(monthExpenses)
+        const monthIncomes = await getIncomesForPeriod(period)
+        if (cancelled) return
+        setAllMonthIncomes(monthIncomes)
         // Compute smart advice
         if (!cancelled) {
-          const advs = await dbComputeAdvice(c, finalMonthExpenses, monthIncomes, s)
+          const advs = await dbComputeAdvice(c, monthExpenses, monthIncomes, s)
           setAdvices(advs)
+        }
+        // Auto-detect payday
+        if (!cancelled) {
+          const suggestion = await detectPayday()
+          setPaydaySuggestion(suggestion)
         }
       } catch (e) {
         console.error("Init error", e)
@@ -256,16 +267,16 @@ export default function Home() {
     return () => { cancelled = true }
   }, [activeTab, filters])
 
-  // ─── Derived stats ────────────────────────────────
+  // ─── Derived stats (budget-period aware) ────────
+  const todayISO = new Date().toISOString().slice(0, 10)
+  const budgetPeriod = settings ? getBudgetPeriod(todayISO, settings.monthStartDay || 1) : null
   const totalMonthExpenses = allMonthExpenses.reduce((s, e) => s + e.amount, 0)
   const totalMonthIncomes = allMonthIncomes.reduce((s, i) => s + i.amount, 0)
   const remaining = (settings?.monthlySalary || 0) + totalMonthIncomes - (settings?.monthlySavings || 0) - totalMonthExpenses
   const totalIncome = (settings?.monthlySalary || 0) + totalMonthIncomes
   const savingsRate = totalIncome > 0 ? Math.round(((totalIncome - totalMonthExpenses - (settings?.monthlySavings || 0)) / totalIncome) * 100) : 0
-  // Daily allowance
-  const today = new Date()
-  const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate()
-  const daysRemaining = daysInMonth - today.getDate() + 1
+  // Daily allowance based on budget period
+  const daysRemaining = budgetPeriod ? Math.max(1, budgetPeriod.totalDays - budgetPeriod.elapsedDays + 1) : 1
   const dailyAllowance = daysRemaining > 0 ? Math.max(0, remaining) / daysRemaining : 0
   // Total monthly subscriptions
   const activeSubs = subscriptions.filter((s) => s.active)
@@ -314,6 +325,27 @@ export default function Home() {
       setExpenses((prev) => [expense, ...prev])
     }
     toast.success(`Dépense de ${formatMoney(data.amount)} ajoutée`)
+    // Large expense alert
+    if (settings && settings.largeExpenseAlert > 0 && data.amount >= settings.largeExpenseAlert) {
+      toast.warning(`Grosse dépense : ${formatMoney(data.amount)} (seuil : ${formatMoney(settings.largeExpenseAlert)})`, {
+        duration: 5000,
+      })
+    }
+    // Budget threshold alert
+    if (data.categoryId && settings) {
+      const cat = categories.find((c) => c.id === data.categoryId)
+      if (cat && cat.budgetLimit > 0) {
+        const spent = allMonthExpenses
+          .filter((e) => e.categoryId === data.categoryId)
+          .reduce((s, e) => s + e.amount, 0) + data.amount
+        const pct = (spent / cat.budgetLimit) * 100
+        if (pct >= 100) {
+          toast.error(`Budget « ${cat.name} » dépassé ! ${formatMoney(spent)} sur ${formatMoney(cat.budgetLimit)}`, { duration: 6000 })
+        } else if (pct >= 80) {
+          toast.warning(`Budget « ${cat.name} » à ${Math.round(pct)}% (${formatMoney(spent)} / ${formatMoney(cat.budgetLimit)})`, { duration: 5000 })
+        }
+      }
+    }
   }
 
   const deleteExpense = async (id: string) => {
@@ -363,6 +395,15 @@ export default function Home() {
     const s = await dbUpdateSettings(data)
     setSettings(s)
     toast.success("Paramètres mis à jour")
+    // If monthStartDay changed, refresh dashboard with new period
+    if (data.monthStartDay !== undefined) {
+      const todayStr = new Date().toISOString().slice(0, 10)
+      const newPeriod = getBudgetPeriod(todayStr, data.monthStartDay || 1)
+      const exps = await getExpensesForPeriod(newPeriod)
+      const incs = await getIncomesForPeriod(newPeriod)
+      setAllMonthExpenses(exps)
+      setAllMonthIncomes(incs)
+    }
   }
 
   const addCategory = async (data: { name: string; icon: string; color: string; budgetLimit: number }) => {
@@ -412,9 +453,13 @@ export default function Home() {
     const result = await dbImportCSV(text)
     if (result.imported > 0) {
       toast.success(`${result.imported} dépenses importées`)
-      // Refresh expenses from IndexedDB
-      const monthExps = await dbGetExpenses({ month: getCurrentMonthStr(), sortBy: "date", sortOrder: "desc" })
-      setAllMonthExpenses(monthExps)
+      // Refresh expenses using budget period
+      const todayStr = new Date().toISOString().slice(0, 10)
+      const period = settings ? getBudgetPeriod(todayStr, settings.monthStartDay || 1) : null
+      if (period) {
+        const monthExps = await getExpensesForPeriod(period)
+        setAllMonthExpenses(monthExps)
+      }
       if (activeTab === "history") {
         const fExps = await dbGetExpenses({ month: filters.month, sortBy: filters.sortBy, sortOrder: filters.sortOrder })
         setExpenses(fExps)
@@ -444,8 +489,17 @@ export default function Home() {
         </p>
       </div>
 
+      {/* Budget Period Indicator */}
+      {budgetPeriod && settings && settings.monthStartDay !== 1 && (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <Calendar className="h-3.5 w-3.5" />
+          <span>Période budgétaire : {budgetPeriod.label}</span>
+          <span className="font-medium">(jour {budgetPeriod.elapsedDays}/{budgetPeriod.totalDays})</span>
+        </div>
+      )}
+
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
         <Card className="bg-gradient-to-br from-emerald-500/10 to-emerald-500/5 border-emerald-500/20">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -1987,6 +2041,52 @@ export default function Home() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Payday Detection */}
+      {paydaySuggestion && (
+        <Card className="border-primary/30 bg-primary/5">
+          <CardHeader>
+            <CardTitle className="text-sm font-medium flex items-center gap-2 flex-wrap">
+              <Sparkles className="h-4 w-4 text-primary shrink-0" />
+              <span className="text-primary font-semibold">Détection automatique du jour de paie</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Basé sur vos {paydaySuggestion.monthsAnalysed} derniers revenus ({paydaySuggestion.label}, moyenne {formatMoney(paydaySuggestion.averageAmount)}).
+            </p>
+            <div className="flex items-center gap-3">
+              <div className="flex-1">
+                <p className="text-sm font-medium">
+                  Jour détecté : <span className="text-primary">le {paydaySuggestion.endOfMonth ? "dernier jour du mois" : `${paydaySuggestion.day}`} du mois</span>
+                </p>
+              </div>
+              {paydaySuggestion.day !== (settings?.monthStartDay || 1) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={async () => {
+                    const day = paydaySuggestion.day
+                    await updateSettings({ monthStartDay: day })
+                    setSettingsForm((prev) => ({ ...prev, monthStartDay: String(day) }))
+                    // Refresh dashboard with new period
+                    const todayStr = new Date().toISOString().slice(0, 10)
+                    const newPeriod = getBudgetPeriod(todayStr, day)
+                    const exps = await getExpensesForPeriod(newPeriod)
+                    const incs = await getIncomesForPeriod(newPeriod)
+                    setAllMonthExpenses(exps)
+                    setAllMonthIncomes(incs)
+                    toast.success(`Mois budgétaire mis à jour au ${day === 31 ? "dernier jour" : `${day}`} du mois`)
+                  }}
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
+                  Appliquer
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Theme */}
       <Card>

@@ -566,7 +566,6 @@ function dueOccurrences(sub: Subscription, fromIso: string, toIso: string): stri
   if (fromIso > toIso) return []
   const [fy, fm] = fromIso.split("-").map(Number)
   const [ty, tm] = toIso.split("-").map(Number)
-  const yearly = sub.frequency === "yearly"
   const out: string[] = []
   for (let index = fy * 12 + (fm - 1); index <= ty * 12 + (tm - 1); index++) {
     const year = Math.floor(index / 12)
@@ -575,7 +574,6 @@ function dueOccurrences(sub: Subscription, fromIso: string, toIso: string): stri
     const day = Math.min(sub.dayOfMonth, daysInMonth)
     const date = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`
     if (date < fromIso || date > toIso) continue
-    if (date > today) continue
     out.push(date)
   }
   return out
@@ -876,4 +874,153 @@ export async function computeAdvice(
 
 function formatEUR(n: number): string {
   return new Intl.NumberFormat("fr-FR", { style: "currency", currency: "EUR" }).format(n)
+}
+
+// ─── Budget Period Utilities ─────────────────────────
+
+export interface BudgetPeriod {
+  key: string
+  start: string  // YYYY-MM-DD
+  end: string    // YYYY-MM-DD
+  label: string
+  totalDays: number
+  elapsedDays: number
+}
+
+function daysInMonth(year: number, month: number): number {
+  return new Date(year, month + 1, 0).getDate()
+}
+
+function effectiveStartDay(year: number, month: number, startDay: number): number {
+  const clamped = Math.min(31, Math.max(1, Math.round(startDay) || 1))
+  return Math.min(clamped, daysInMonth(year, month))
+}
+
+function toISODate(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, "0")
+  const day = String(d.getDate()).padStart(2, "0")
+  return `${y}-${m}-${day}`
+}
+
+export function getBudgetPeriod(dateISO: string, startDay: number): BudgetPeriod {
+  const d = new Date(dateISO)
+  const thisMonthStart = effectiveStartDay(d.getFullYear(), d.getMonth(), startDay)
+  const startMonth = d.getDate() >= thisMonthStart ? d.getMonth() : d.getMonth() - 1
+  const year = d.getFullYear()
+  const adjustedYear = startMonth < 0 ? year - 1 : year
+  const adjustedMonth = startMonth < 0 ? 11 : startMonth
+
+  const start = new Date(adjustedYear, adjustedMonth, effectiveStartDay(adjustedYear, adjustedMonth, startDay))
+  const nextMonth = adjustedMonth + 1
+  const nextYear = nextMonth > 11 ? adjustedYear + 1 : adjustedYear
+  const actualNextMonth = nextMonth > 11 ? 0 : nextMonth
+  const nextStart = new Date(nextYear, actualNextMonth, effectiveStartDay(nextYear, actualNextMonth, startDay))
+  const end = new Date(nextStart.getTime() - 86_400_000)
+
+  const todayStr = toISODate(new Date())
+  const msPerDay = 86_400_000
+  const totalDays = Math.round((end.getTime() - start.getTime()) / msPerDay) + 1
+  const elapsedDays = Math.min(totalDays, Math.max(0, Math.round((new Date(todayStr).getTime() - start.getTime()) / msPerDay) + 1))
+
+  const dayMonthFmt = new Intl.DateTimeFormat("fr-FR", { day: "numeric", month: "short" })
+  const label = startDay === 1
+    ? new Intl.DateTimeFormat("fr-FR", { month: "long", year: "numeric" }).format(start)
+    : `${dayMonthFmt.format(start)} – ${dayMonthFmt.format(end)} ${end.getFullYear()}`
+
+  return {
+    key: toISODate(start).slice(0, 7),
+    start: toISODate(start),
+    end: toISODate(end),
+    label,
+    totalDays,
+    elapsedDays,
+  }
+}
+
+export function inBudgetPeriod(dateISO: string, period: BudgetPeriod): boolean {
+  return dateISO >= period.start && dateISO <= period.end
+}
+
+// ─── Payday Detection ────────────────────────────────
+
+export interface PaydaySuggestion {
+  day: number
+  monthsAnalysed: number
+  label: string
+  averageAmount: number
+  endOfMonth: boolean
+}
+
+export async function detectPayday(): Promise<PaydaySuggestion | null> {
+  const db = await getDB()
+  const allIncomes = await db.getAll("incomes")
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const cutoffDate = new Date()
+  cutoffDate.setMonth(cutoffDate.getMonth() - 12)
+  const cutoff = cutoffDate.toISOString().slice(0, 10)
+
+  // Group largest income per calendar month
+  const byMonth = new Map<string, Income>()
+  for (const inc of allIncomes) {
+    const dateStr = inc.date.slice(0, 10)
+    if (dateStr < cutoff || dateStr > todayStr) continue
+    const key = dateStr.slice(0, 7)
+    const current = byMonth.get(key)
+    if (!current || inc.amount > current.amount) byMonth.set(key, inc)
+  }
+
+  const picks = [...byMonth.values()].sort((a, b) => a.date.localeCompare(b.date))
+  if (picks.length < 2) return null
+
+  // Check if all fall at month end
+  const endOfMonth = picks.every((t) => {
+    const day = parseInt(t.date.slice(8, 10))
+    const [y, m] = t.date.slice(0, 7).split("-").map(Number)
+    return day >= daysInMonth(y, m - 1) - 1
+  })
+
+  let day: number
+  if (endOfMonth) {
+    day = 31
+  } else {
+    const counts = new Map<number, number>()
+    for (const t of picks) {
+      const d = parseInt(t.date.slice(8, 10))
+      counts.set(d, (counts.get(d) || 0) + 1)
+    }
+    const mostRecent = parseInt(picks[picks.length - 1].date.slice(8, 10))
+    day = [...counts.entries()].sort(
+      (a, b) => b[1] - a[1] || (a[0] === mostRecent ? -1 : b[0] === mostRecent ? 1 : 0),
+    )[0][0]
+  }
+
+  const latest = picks[picks.length - 1]
+  const label = latest.description.trim() || "votre revenu principal"
+  const averageAmount = Math.round(picks.reduce((s, t) => s + t.amount, 0) / picks.length)
+
+  return { day, monthsAnalysed: picks.length, label, averageAmount, endOfMonth }
+}
+
+// ─── Period-aware expense/income queries ────────────
+
+export async function getExpensesForPeriod(period: BudgetPeriod): Promise<Expense[]> {
+  const db = await getDB()
+  const expenses = await db.getAll("expenses")
+  const filtered = expenses.filter((e) => inBudgetPeriod(e.date.slice(0, 10), period))
+  filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  const categories = await db.getAll("categories")
+  const catMap = new Map(categories.map((c) => [c.id, c]))
+  for (const e of filtered) {
+    e.category = e.categoryId ? catMap.get(e.categoryId) || null : null
+  }
+  return filtered
+}
+
+export async function getIncomesForPeriod(period: BudgetPeriod): Promise<Income[]> {
+  const db = await getDB()
+  const incomes = await db.getAll("incomes")
+  const filtered = incomes.filter((i) => inBudgetPeriod(i.date.slice(0, 10), period))
+  filtered.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  return filtered
 }
