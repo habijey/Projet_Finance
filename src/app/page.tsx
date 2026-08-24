@@ -126,6 +126,7 @@ import {
   updateSubscription as dbUpdateSubscription,
   deleteSubscription as dbDeleteSubscription,
   generateSubscriptionExpenses as dbGenerateSubscriptionExpenses,
+  generateRecurringSavingsExpenses as dbGenerateRecurringSavingsExpenses,
   computeAdvice as dbComputeAdvice,
   getBudgetPeriod,
   getExpensesForPeriod,
@@ -223,8 +224,9 @@ export default function Home() {
         const subs = await dbGetSubscriptions()
         if (cancelled) return
         setSubscriptions(subs)
-        // Auto-generate subscription expenses
+        // Auto-generate subscription & recurring savings expenses
         await dbGenerateSubscriptionExpenses()
+        await dbGenerateRecurringSavingsExpenses()
         // Use budget period for dashboard data
         const todayISO = new Date().toISOString().slice(0, 10)
         const period = getBudgetPeriod(todayISO, s.monthStartDay || 1)
@@ -277,6 +279,34 @@ export default function Home() {
   const remaining = (settings?.monthlySalary || 0) + totalMonthIncomes - (settings?.monthlySavings || 0) - totalMonthExpenses
   const totalIncome = (settings?.monthlySalary || 0) + totalMonthIncomes
   const savingsRate = totalIncome > 0 ? Math.round(((totalIncome - totalMonthExpenses - (settings?.monthlySavings || 0)) / totalIncome) * 100) : 0
+
+  // ─── Financial Health Score (0-100) ─────────────
+  let healthScore = 50
+  if (totalIncome > 0) {
+    // 1. Savings rate score (max 40)
+    const savingsScore = Math.min(40, Math.max(0, savingsRate * 2))
+    // 2. Deficit score (max 35)
+    const deficitScore = remaining >= 0 ? 35 : Math.max(0, 35 - Math.abs(remaining) / 20)
+    // 3. Budget compliance score (max 25)
+    const overBudgetCount = categories.filter((c) => {
+      if (c.budgetLimit <= 0) return false
+      const spent = allMonthExpenses.filter((e) => e.categoryId === c.id).reduce((s, e) => s + e.amount, 0)
+      return spent > c.budgetLimit
+    }).length
+    const budgetScore = Math.max(0, 25 - overBudgetCount * 10)
+    healthScore = Math.round(savingsScore + deficitScore + budgetScore)
+  }
+
+  const healthLabel =
+    healthScore >= 80 ? "Excellente" :
+    healthScore >= 60 ? "Bonne" :
+    healthScore >= 40 ? "Moyenne" : "À surveiller"
+
+  const healthColor =
+    healthScore >= 80 ? "text-emerald-500 bg-emerald-500/10 border-emerald-500/30" :
+    healthScore >= 60 ? "text-blue-500 bg-blue-500/10 border-blue-500/30" :
+    healthScore >= 40 ? "text-amber-500 bg-amber-500/10 border-amber-500/30" : "text-rose-500 bg-rose-500/10 border-rose-500/30"
+
   // Daily allowance based on budget period
   const daysRemaining = budgetPeriod ? Math.max(1, budgetPeriod.totalDays - budgetPeriod.elapsedDays + 1) : 1
   const dailyAllowance = daysRemaining > 0 ? Math.max(0, remaining) / daysRemaining : 0
@@ -498,11 +528,17 @@ export default function Home() {
   // ─── Render views ────────────────────────────────
   const renderDashboard = () => (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Bonjour 👋</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Voici le résumé de vos finances ce mois-ci
-        </p>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h1 className="text-2xl font-bold">Bonjour 👋</h1>
+          <p className="text-muted-foreground text-sm mt-1">
+            Voici le résumé de vos finances ce mois-ci
+          </p>
+        </div>
+        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold ${healthColor}`}>
+          <Sparkles className="h-4 w-4" />
+          <span>Santé financière : {healthScore}/100 ({healthLabel})</span>
+        </div>
       </div>
 
       {/* Budget Period Indicator */}
@@ -1774,12 +1810,19 @@ export default function Home() {
                       <span className="text-muted-foreground">Reste: {formatMoney(Math.max(0, remaining))}</span>
                     </div>
                   </div>
-                  {goal.deadline && (
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <Calendar className="h-3.5 w-3.5" />
-                      Échéance: {formatDate(goal.deadline)}
-                    </div>
-                  )}
+                  <div className="flex items-center justify-between text-xs text-muted-foreground pt-1">
+                    {goal.deadline ? (
+                      <span className="flex items-center gap-1.5">
+                        <Calendar className="h-3.5 w-3.5" />
+                        Échéance: {formatDate(goal.deadline)}
+                      </span>
+                    ) : <span />}
+                    {settings?.monthlySavings && settings.monthlySavings > 0 && remaining > 0 && (
+                      <span className="font-medium text-emerald-600 dark:text-emerald-400">
+                        Atteint dans ~{Math.ceil((goal.targetAmount - goal.currentAmount) / settings.monthlySavings)} mois au rythme actuel
+                      </span>
+                    )}
+                  </div>
                 </CardContent>
               </Card>
             )
@@ -1903,7 +1946,10 @@ export default function Home() {
           </div>
           <p className="text-xs text-muted-foreground leading-relaxed">
             Par défaut, votre épargne mensuelle programmée ({formatMoney(settings?.monthlySavings || 0)}) est déduite de votre solde disponible.
-            Lorsque vous alimentez un objectif ci-dessus, une dépense est automatiquement enregistrée dans la catégorie <strong>Épargne</strong> afin de suivre ce flux d'argent dans votre historique et votre budget.
+            {settings?.autoSavingsExpense && (
+              <span> Un prélèvement automatique récurrent est programmé chaque <strong>le {settings?.monthlySavingsDay || 1} du mois</strong> dans votre historique.</span>
+            )}
+            {" "}Lorsque vous alimentez un objectif manuellement, une dépense est également enregistrée dans la catégorie <strong>Épargne</strong>.
           </p>
         </CardContent>
       </Card>
@@ -1986,6 +2032,8 @@ export default function Home() {
   const [settingsForm, setSettingsForm] = useState({
     monthlySalary: "0",
     monthlySavings: "0",
+    monthlySavingsDay: "1",
+    autoSavingsExpense: true,
     monthStartDay: "1",
     largeExpenseAlert: "50",
   })
@@ -1999,6 +2047,8 @@ export default function Home() {
       setSettingsForm({
         monthlySalary: String(settings.monthlySalary || 0),
         monthlySavings: String(settings.monthlySavings || 0),
+        monthlySavingsDay: String(settings.monthlySavingsDay || 1),
+        autoSavingsExpense: settings.autoSavingsExpense ?? true,
         monthStartDay: String(settings.monthStartDay || 1),
         largeExpenseAlert: String(settings.largeExpenseAlert || 50),
       })
@@ -2103,6 +2153,34 @@ export default function Home() {
               placeholder="200"
             />
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 border p-3 rounded-lg bg-muted/20">
+            <div className="space-y-2">
+              <Label className="text-xs">Jour du virement récurrent d'épargne</Label>
+              <Select
+                value={settingsForm.monthlySavingsDay}
+                onValueChange={(v) => setSettingsForm({ ...settingsForm, monthlySavingsDay: v })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Array.from({ length: 28 }, (_, i) => i + 1).map((d) => (
+                    <SelectItem key={d} value={String(d)}>Le {d} du mois</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center justify-between pt-4">
+              <div>
+                <Label className="text-xs font-medium cursor-pointer">Prélèvement automatique dans l'historique</Label>
+                <p className="text-[10px] text-muted-foreground">Créer la dépense « Virement Épargne » chaque mois</p>
+              </div>
+              <Switch
+                checked={settingsForm.autoSavingsExpense}
+                onCheckedChange={(checked) => setSettingsForm({ ...settingsForm, autoSavingsExpense: checked })}
+              />
+            </div>
+          </div>
           <div className="space-y-2">
             <Label>Jour de début du mois budgétaire</Label>
             <Select
@@ -2135,14 +2213,21 @@ export default function Home() {
             <p className="text-xs text-muted-foreground">Seuil au-dessus duquel une dépense déclenche une alerte (0 = désactivé)</p>
           </div>
           <Button
-            onClick={() =>
-              updateSettings({
+            onClick={async () => {
+              await updateSettings({
                 monthlySalary: parseFloat(settingsForm.monthlySalary) || 0,
                 monthlySavings: parseFloat(settingsForm.monthlySavings) || 0,
+                monthlySavingsDay: parseInt(settingsForm.monthlySavingsDay) || 1,
+                autoSavingsExpense: settingsForm.autoSavingsExpense,
                 monthStartDay: parseInt(settingsForm.monthStartDay) || 1,
                 largeExpenseAlert: parseFloat(settingsForm.largeExpenseAlert) || 0,
               })
-            }
+              await dbGenerateRecurringSavingsExpenses()
+              const todayStr = new Date().toISOString().slice(0, 10)
+              const period = getBudgetPeriod(todayStr, parseInt(settingsForm.monthStartDay) || 1)
+              const exps = await getExpensesForPeriod(period)
+              setAllMonthExpenses(exps)
+            }}
           >
             <CheckCircle2 className="h-4 w-4 mr-2" />
             Enregistrer

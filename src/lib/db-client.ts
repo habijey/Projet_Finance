@@ -6,6 +6,8 @@ export interface Settings {
   id?: string
   monthlySalary: number
   monthlySavings: number
+  monthlySavingsDay?: number
+  autoSavingsExpense?: boolean
   currency: string
   monthStartDay: number
   largeExpenseAlert: number
@@ -174,6 +176,8 @@ export async function seedDB(): Promise<{ settings: Settings; categories: Catego
       id: "main",
       monthlySalary: 0,
       monthlySavings: 0,
+      monthlySavingsDay: 1,
+      autoSavingsExpense: true,
       currency: "EUR",
       monthStartDay: 1,
       largeExpenseAlert: 50,
@@ -200,7 +204,7 @@ export async function getSettings(): Promise<Settings> {
   const db = await getDB()
   let settings = await db.get("settings", "main")
   if (!settings) {
-    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
+    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, monthlySavingsDay: 1, autoSavingsExpense: true, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
     await db.put("settings", settings)
   }
   return settings!
@@ -210,7 +214,7 @@ export async function updateSettings(data: Partial<Settings>): Promise<Settings>
   const db = await getDB()
   let settings = await db.get("settings", "main")
   if (!settings) {
-    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
+    settings = { id: "main", monthlySalary: 0, monthlySavings: 0, monthlySavingsDay: 1, autoSavingsExpense: true, currency: "EUR", monthStartDay: 1, largeExpenseAlert: 50 }
   }
   const updated = { ...settings, ...data }
   await db.put("settings", updated)
@@ -560,6 +564,66 @@ export async function generateSubscriptionExpenses(): Promise<Expense[]> {
       created.push(expense)
     }
   }
+  await tx.done
+  return created
+}
+
+// Generate recurring savings expenses automatically based on settings
+export async function generateRecurringSavingsExpenses(): Promise<Expense[]> {
+  const db = await getDB()
+  const settings = await getSettings()
+
+  if (!settings.autoSavingsExpense || (settings.monthlySavings || 0) <= 0) {
+    return []
+  }
+
+  const categories = await db.getAll("categories")
+  const savingsCategory = categories.find((c) => c.name.toLowerCase() === "épargne")
+  const allExpenses = await db.getAll("expenses")
+
+  const todayIso = new Date().toISOString().slice(0, 10)
+  const savingsDay = settings.monthlySavingsDay || 1
+
+  // Done set for occurrences like `savings:2026-08`
+  const done = new Set(
+    allExpenses
+      .filter((e) => e.occurrence && e.occurrence.startsWith("savings:"))
+      .map((e) => e.occurrence)
+  )
+
+  const created: Expense[] = []
+  const tx = db.transaction("expenses", "readwrite")
+
+  // Generate for current month if date reached
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const currentMonth = now.getMonth() + 1
+  const daysInCurrentMonth = new Date(currentYear, currentMonth, 0).getDate()
+  const actualDay = Math.min(savingsDay, daysInCurrentMonth)
+
+  const targetDateStr = `${currentYear}-${String(currentMonth).padStart(2, "0")}-${String(actualDay).padStart(2, "0")}`
+
+  if (targetDateStr <= todayIso) {
+    const occKey = `savings:${currentYear}-${String(currentMonth).padStart(2, "0")}`
+    if (!done.has(occKey)) {
+      const nowIso = new Date().toISOString()
+      const expense: Expense = {
+        id: uid(),
+        amount: settings.monthlySavings,
+        description: "Virement Épargne mensuel",
+        date: new Date(targetDateStr).toISOString(),
+        categoryId: savingsCategory?.id || null,
+        category: savingsCategory || null,
+        note: "Virement d'épargne récurrent automatique",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        occurrence: occKey,
+      }
+      await tx.store.put(expense)
+      created.push(expense)
+    }
+  }
+
   await tx.done
   return created
 }
