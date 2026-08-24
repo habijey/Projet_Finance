@@ -26,7 +26,7 @@ export interface Expense {
   amount: number
   description: string
   date: string // ISO string
-  categoryId?: string
+  categoryId?: string | null
   category?: Category | null
   note?: string | null
   subscriptionId?: string | null
@@ -115,7 +115,8 @@ const DEFAULT_CATEGORIES: Omit<Category, "id">[] = [
   { name: "Éducation", icon: "BookOpen", color: "#84cc16", budgetLimit: 0, isDefault: true, sortOrder: 6 },
   { name: "Abonnements", icon: "Smartphone", color: "#14b8a6", budgetLimit: 0, isDefault: true, sortOrder: 7 },
   { name: "Restaurants", icon: "UtensilsCrossed", color: "#eab308", budgetLimit: 0, isDefault: true, sortOrder: 8 },
-  { name: "Autre", icon: "CircleDot", color: "#64748b", budgetLimit: 0, isDefault: true, sortOrder: 9 },
+  { name: "Épargne", icon: "PiggyBank", color: "#10b981", budgetLimit: 0, isDefault: true, sortOrder: 9 },
+  { name: "Autre", icon: "CircleDot", color: "#64748b", budgetLimit: 0, isDefault: true, sortOrder: 10 },
 ]
 
 // ─── UID generator ──────────────────────────────────
@@ -526,6 +527,7 @@ export async function generateSubscriptionExpenses(): Promise<Expense[]> {
   const subscriptions = await db.getAll("subscriptions")
   const allExpenses = await db.getAll("expenses")
   const today = new Date().toISOString().slice(0, 10)
+  const nowIso = new Date().toISOString()
   // Track which (subscriptionId:occurrence) combos already exist
   const done = new Set(
     allExpenses
@@ -536,11 +538,11 @@ export async function generateSubscriptionExpenses(): Promise<Expense[]> {
   const tx = db.transaction("expenses", "readwrite")
   for (const sub of subscriptions) {
     if (!sub.active) continue
-    const startIso = (sub.createdAt || now).slice(0, 10)
+    const startIso = (sub.createdAt || nowIso).slice(0, 10)
     const occurrences = dueOccurrences(sub, startIso, today)
     for (const occ of occurrences) {
       if (done.has(`${sub.id}:${occ}`)) continue
-      const now = new Date().toISOString()
+      const currentNow = new Date().toISOString()
       const expense: Expense = {
         id: uid(),
         amount: sub.amount,
@@ -549,8 +551,8 @@ export async function generateSubscriptionExpenses(): Promise<Expense[]> {
         categoryId: sub.categoryId || undefined,
         category: null,
         note: "Prélèvement automatique",
-        createdAt: now,
-        updatedAt: now,
+        createdAt: currentNow,
+        updatedAt: currentNow,
         subscriptionId: sub.id,
         occurrence: occ,
       }
@@ -558,7 +560,7 @@ export async function generateSubscriptionExpenses(): Promise<Expense[]> {
       created.push(expense)
     }
   }
-  await tx.done()
+  await tx.done
   return created
 }
 
@@ -584,45 +586,92 @@ function dueOccurrences(sub: Subscription, fromIso: string, toIso: string): stri
 export async function importCSV(text: string): Promise<{ imported: number; errors: string[]; total: number }> {
   const db = await getDB()
   const categories = await db.getAll("categories")
+  const existingExpenses = await db.getAll("expenses")
   const catMap = new Map(categories.map((c) => [c.name.toLowerCase(), c]))
 
-  const lines = text.split("\n").filter((l) => l.trim())
+  // Deduplication set: dateStr + description + amount
+  const existingSet = new Set(
+    existingExpenses.map((e) => `${e.date.slice(0, 10)}:${e.description.toLowerCase().trim()}:${Math.abs(e.amount).toFixed(2)}`)
+  )
+
+  const lines = text.split(/\r?\n/).filter((l) => l.trim())
+  if (lines.length === 0) {
+    return { imported: 0, errors: ["Fichier vide"], total: 0 }
+  }
+
+  // Detect delimiter (; , \t)
+  const firstLine = lines[0]
+  let delimiter = ";"
+  if ((firstLine.match(/;/g) || []).length < (firstLine.match(/,/g) || []).length) {
+    delimiter = ","
+  }
+  if ((firstLine.match(/\t/g) || []).length > (firstLine.match(/;/g) || []).length) {
+    delimiter = "\t"
+  }
+
   let imported = 0
   const errors: string[] = []
 
+  // Check header
+  const headerParts = firstLine.split(delimiter).map((p) => p.trim().replace(/^"|"$/g, "").toLowerCase())
+  let dateIdx = 0
+  let descIdx = 1
+  let amountIdx = 2
+  let catIdx = 3
+  let debitIdx = -1
+  let creditIdx = -1
+
+  const isHeader = headerParts.some((h) => h.includes("date") || h.includes("libelle") || h.includes("montant") || h.includes("debit") || h.includes("description"))
+  const startRow = isHeader ? 1 : 0
+
+  if (isHeader) {
+    headerParts.forEach((col, idx) => {
+      if (col.includes("date")) dateIdx = idx
+      else if (col.includes("libell") || col.includes("desc") || col.includes("detail") || col.includes("nom")) descIdx = idx
+      else if (col.includes("montant") || col.includes("amount")) amountIdx = idx
+      else if (col.includes("debit")) debitIdx = idx
+      else if (col.includes("credit")) creditIdx = idx
+      else if (col.includes("cat")) catIdx = idx
+    })
+  }
+
   const tx = db.transaction("expenses", "readwrite")
 
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = startRow; i < lines.length; i++) {
     const line = lines[i].trim()
     if (!line) continue
 
-    // Try semicolon then comma
-    let parts = line.split(";").map((p) => p.trim().replace(/^"|"$/g, ""))
-    if (parts.length < 3) {
-      parts = line.split(",").map((p) => p.trim().replace(/^"|"$/g, ""))
-    }
-    if (parts.length < 3) {
+    const parts = line.split(delimiter).map((p) => p.trim().replace(/^"|"$/g, ""))
+    if (parts.length < 2) {
       errors.push(`Ligne ${i + 1}: format invalide`)
       continue
     }
 
-    const dateStr = parts[0]
-    const description = parts[1]
-    const amountStr = parts[2].replace(",", ".").replace(/[^\d.\-]/g, "")
-    const categoryName = parts[3] || ""
+    const dateStr = parts[dateIdx] || ""
+    const description = parts[descIdx] || "Dépense importée"
 
-    const amount = parseFloat(amountStr)
-    if (isNaN(amount)) {
-      errors.push(`Ligne ${i + 1}: montant invalide "${parts[2]}"`)
+    let rawAmount = 0
+    if (debitIdx >= 0 && parts[debitIdx]) {
+      const debitStr = parts[debitIdx].replace(",", ".").replace(/[^\d.\-]/g, "")
+      rawAmount = parseFloat(debitStr)
+    } else if (amountIdx < parts.length) {
+      const amountStr = parts[amountIdx].replace(",", ".").replace(/[^\d.\-]/g, "")
+      rawAmount = parseFloat(amountStr)
+    }
+
+    if (isNaN(rawAmount) || rawAmount === 0) {
+      // Ignore zero or invalid amounts (or positive credit lines if credit column handled)
       continue
     }
 
+    const amount = Math.abs(rawAmount)
+
     let date: Date
-    const dmy = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+    const dmy = dateStr.match(/^(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{4})$/)
     if (dmy) {
       date = new Date(parseInt(dmy[3]), parseInt(dmy[2]) - 1, parseInt(dmy[1]))
     } else {
-      const ymd = dateStr.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/)
+      const ymd = dateStr.match(/^(\d{4})[\/\.-](\d{1,2})[\/\.-](\d{1,2})$/)
       if (ymd) {
         date = new Date(parseInt(ymd[1]), parseInt(ymd[2]) - 1, parseInt(ymd[3]))
       } else {
@@ -630,26 +679,37 @@ export async function importCSV(text: string): Promise<{ imported: number; error
       }
     }
 
+    const isoDateStr = date.toISOString().slice(0, 10)
+    const dedupKey = `${isoDateStr}:${description.toLowerCase().trim()}:${amount.toFixed(2)}`
+
+    if (existingSet.has(dedupKey)) {
+      // Skip duplicate
+      continue
+    }
+
+    const categoryName = parts[catIdx] || ""
     const cat = categoryName ? catMap.get(categoryName.toLowerCase()) : undefined
     const now = new Date().toISOString()
 
     const expense: Expense = {
       id: uid(),
-      amount: Math.abs(amount),
+      amount,
       description,
       date: date.toISOString(),
       categoryId: cat?.id,
       category: cat || null,
-      note: null,
+      note: "Importé via CSV bancaire",
       createdAt: now,
       updatedAt: now,
     }
+
     await tx.store.put(expense)
+    existingSet.add(dedupKey)
     imported++
   }
 
   await tx.done
-  return { imported, errors, total: lines.length - 1 }
+  return { imported, errors, total: lines.length - startRow }
 }
 
 // ─── CSV Export ─────────────────────────────────────

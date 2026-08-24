@@ -205,6 +205,8 @@ export default function Home() {
   const [loading, setLoading] = useState(true)
   const [mounted] = useState(true)
   const [paydaySuggestion, setPaydaySuggestion] = useState<PaydaySuggestion | null>(null)
+  const [recordExpenseOnAddFunds, setRecordExpenseOnAddFunds] = useState(true)
+  const [showBankGuide, setShowBankGuide] = useState(false)
 
   // ─── Load all data from IndexedDB on first load ───
   useEffect(() => {
@@ -407,7 +409,11 @@ export default function Home() {
   }
 
   const addCategory = async (data: { name: string; icon: string; color: string; budgetLimit: number }) => {
-    const cat = await dbAddCategory(data)
+    const cat = await dbAddCategory({
+      ...data,
+      isDefault: false,
+      sortOrder: categories.length,
+    })
     setCategories((prev) => [...prev, cat])
     toast.success(`Catégorie "${cat.name}" créée`)
   }
@@ -442,10 +448,20 @@ export default function Home() {
     toast.success("Objectif supprimé")
   }
 
-  const addFundsToGoal = async (id: string, amount: number) => {
+  const addFundsToGoal = async (id: string, amount: number, recordAsExpense = true) => {
     const goal = savingsGoals.find((g) => g.id === id)
     if (!goal) return
     await updateSavingsGoal(id, { currentAmount: goal.currentAmount + amount })
+    if (recordAsExpense) {
+      const savingsCategory = categories.find((c) => c.name.toLowerCase() === "épargne")
+      await addExpense({
+        amount,
+        description: `Épargne : ${goal.name}`,
+        date: new Date().toISOString().slice(0, 10),
+        categoryId: savingsCategory?.id || null,
+        note: `Versement vers l'objectif "${goal.name}"`,
+      })
+    }
   }
 
   const handleCSVImport = async (file: File) => {
@@ -804,7 +820,7 @@ export default function Home() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-rose-500 hover:text-rose-600"
-                      onClick={() => deleteIncomeAction(income.id!)}
+                      onClick={() => income.id && deleteIncomeAction(income.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -895,7 +911,7 @@ export default function Home() {
                   <SelectValue placeholder="Choisir..." />
                 </SelectTrigger>
                 <SelectContent>
-                  {categories.map((c) => (
+                  {categories.map((c) => c.id && (
                     <SelectItem key={c.id} value={c.id}>
                       <div className="flex items-center gap-2">
                         <div className="w-3 h-3 rounded-full" style={{ backgroundColor: c.color }} />
@@ -1068,7 +1084,7 @@ export default function Home() {
                   <div className="flex items-center gap-3 min-w-0">
                     <Switch
                       checked={sub.active}
-                      onCheckedChange={(checked) => toggleSubscription(sub.id!, checked)}
+                      onCheckedChange={(checked) => sub.id && toggleSubscription(sub.id, checked)}
                     />
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">{sub.name}</p>
@@ -1085,7 +1101,7 @@ export default function Home() {
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-rose-500"
-                      onClick={() => deleteSubscriptionAction(sub.id!)}
+                      onClick={() => sub.id && deleteSubscriptionAction(sub.id)}
                     >
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
@@ -1158,7 +1174,7 @@ export default function Home() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">Aucune</SelectItem>
-                  {categories.map((c) => (
+                  {categories.map((c) => c.id && (
                     <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
                   ))}
                 </SelectContent>
@@ -1204,17 +1220,23 @@ export default function Home() {
       {/* CSV Import */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium flex items-center gap-2">
-            <Upload className="h-4 w-4" />
-            Import CSV bancaire
+          <CardTitle className="text-sm font-medium flex items-center justify-between">
+            <span className="flex items-center gap-2">
+              <Upload className="h-4 w-4" />
+              Import CSV / Relèvé bancaire
+            </span>
+            <Button variant="outline" size="sm" onClick={() => setShowBankGuide(true)}>
+              <Info className="h-3.5 w-3.5 mr-1" />
+              Connexion bancaire & Tuto
+            </Button>
           </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="border-2 border-dashed rounded-lg p-8 text-center hover:border-primary/50 transition-colors">
+        <CardContent className="space-y-4">
+          <div className="border-2 border-dashed rounded-lg p-6 text-center hover:border-primary/50 transition-colors">
             <FolderDown className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-            <p className="text-sm font-medium mb-1">Glissez votre fichier CSV ici</p>
+            <p className="text-sm font-medium mb-1">Importez votre fichier CSV de banque</p>
             <p className="text-xs text-muted-foreground mb-4">
-              Colonnes attendues : Date; Description; Montant; Catégorie (optionnel)
+              Détection automatique du format (Boursorama, Revolut, N26, Fortuneo, BNP, etc.) & dédoublonnage automatique.
             </p>
             <label>
               <input
@@ -1229,13 +1251,75 @@ export default function Home() {
               <Button variant="outline" className="cursor-pointer" asChild>
                 <span>
                   <Upload className="h-4 w-4 mr-2" />
-                  Parcourir les fichiers
+                  Parcourir un fichier CSV
                 </span>
               </Button>
             </label>
           </div>
         </CardContent>
       </Card>
+
+      {/* Bank Connection & Guide Dialog */}
+      <Dialog open={showBankGuide} onOpenChange={setShowBankGuide}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Wallet className="h-5 w-5 text-primary" />
+              Connexion bancaire & Import rapide
+            </DialogTitle>
+            <DialogDescription>
+              Comprendre la connexion directe et importer vos comptes en 1 clic.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 text-sm">
+            <div className="p-3 bg-muted/60 rounded-lg space-y-2">
+              <h4 className="font-semibold text-foreground flex items-center gap-1.5">
+                <AlertCircle className="h-4 w-4 text-amber-500 shrink-0" />
+                Pourquoi pas de connexion API automatique directe ?
+              </h4>
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                <strong>MesDépenses</strong> est une application <strong>100% locale et privée</strong> qui conserve toutes vos données financières uniquement sur votre appareil (IndexedDB).
+                En Europe (réglementation DSP2), la connexion en temps réel aux API des banques nécessite un serveur centralisé avec agrément bancaire (ACPR/DSP2) et l'envoi de vos identifiants sur des serveurs tiers.
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <h4 className="font-semibold text-foreground">💡 Comment exporter votre CSV depuis votre banque :</h4>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                <div className="p-2.5 border rounded-lg bg-card">
+                  <p className="font-bold text-primary mb-1">BoursoBank / Boursorama</p>
+                  <p className="text-muted-foreground">Espace Client &gt; Mes comptes &gt; Telecharger mes mouvements &gt; Format CSV.</p>
+                </div>
+                <div className="p-2.5 border rounded-lg bg-card">
+                  <p className="font-bold text-primary mb-1">Revolut / N26</p>
+                  <p className="text-muted-foreground">App mobile ou Web &gt; Relevés / Exporter &gt; Sélectionner CSV &gt; Exporter.</p>
+                </div>
+                <div className="p-2.5 border rounded-lg bg-card">
+                  <p className="font-bold text-primary mb-1">Fortuneo</p>
+                  <p className="text-muted-foreground">Comptes &gt; Historique &gt; Exporter des opérations &gt; Format CSV.</p>
+                </div>
+                <div className="p-2.5 border rounded-lg bg-card">
+                  <p className="font-bold text-primary mb-1">BNP / Crédit Agricole / LCL</p>
+                  <p className="text-muted-foreground">Mes opérations &gt; Exporter la liste des opérations &gt; CSV / Excel.</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="p-3 border rounded-lg bg-emerald-500/10 text-emerald-800 dark:text-emerald-300 space-y-1">
+              <p className="font-semibold text-xs">✨ Détection intelligente & Anti-doublons</p>
+              <p className="text-xs">
+                Vous pouvez réimporter le même fichier plusieurs fois sans risque : l'application filtre automatiquement les dépenses déjà existantes.
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button onClick={() => setShowBankGuide(false)}>J'ai compris</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 
@@ -1287,7 +1371,7 @@ export default function Home() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Toutes</SelectItem>
-                  {categories.map((c) => (
+                  {categories.map((c) => c.id && (
                     <SelectItem key={c.id} value={c.id}>
                       <div className="flex items-center gap-2">
                         <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
@@ -1451,7 +1535,7 @@ export default function Home() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-8 w-8 text-rose-500 hover:text-rose-600"
-                                  onClick={() => setDeleteId(expense.id)}
+                                  onClick={() => expense.id && setDeleteId(expense.id)}
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </Button>
@@ -1538,7 +1622,7 @@ export default function Home() {
                     <SelectValue placeholder="Choisir..." />
                   </SelectTrigger>
                   <SelectContent>
-                    {categories.map((c) => (
+                    {categories.map((c) => c.id && (
                       <SelectItem key={c.id} value={c.id}>
                         <div className="flex items-center gap-2">
                           <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
@@ -1577,7 +1661,7 @@ export default function Home() {
             </Button>
             <Button
               onClick={async () => {
-                if (!editExpense) return
+                if (!editExpense || !editExpense.id) return
                 const updated = await dbUpdateExpense(editExpense.id, {
                   amount: parseFloat(editForm.amount),
                   description: editForm.description,
@@ -1665,7 +1749,7 @@ export default function Home() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8"
-                        onClick={() => setAddFundsGoalId(goal.id)}
+                        onClick={() => goal.id && setAddFundsGoalId(goal.id)}
                       >
                         <DollarSign className="h-3.5 w-3.5" />
                       </Button>
@@ -1673,7 +1757,7 @@ export default function Home() {
                         variant="ghost"
                         size="icon"
                         className="h-8 w-8 text-rose-500 hover:text-rose-600"
-                        onClick={() => setDeleteGoalId(goal.id)}
+                        onClick={() => goal.id && setDeleteGoalId(goal.id)}
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -1810,12 +1894,26 @@ export default function Home() {
         </DialogContent>
       </Dialog>
 
+      {/* Explanation Banner for Savings */}
+      <Card className="border-emerald-500/30 bg-emerald-500/5">
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-300 font-semibold text-sm">
+            <PiggyBank className="h-4 w-4 shrink-0" />
+            <span>Comment l'épargne interagit avec vos dépenses ?</span>
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            Par défaut, votre épargne mensuelle programmée ({formatMoney(settings?.monthlySavings || 0)}) est déduite de votre solde disponible.
+            Lorsque vous alimentez un objectif ci-dessus, une dépense est automatiquement enregistrée dans la catégorie <strong>Épargne</strong> afin de suivre ce flux d'argent dans votre historique et votre budget.
+          </p>
+        </CardContent>
+      </Card>
+
       {/* Add Funds Dialog */}
       <Dialog open={!!addFundsGoalId} onOpenChange={() => setAddFundsGoalId(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Ajouter des fonds</DialogTitle>
-            <DialogDescription>Combien souhaitez-vous ajouter ?</DialogDescription>
+            <DialogDescription>Combien souhaitez-vous ajouter à cet objectif ?</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
@@ -1829,6 +1927,16 @@ export default function Home() {
                 className="text-2xl font-bold h-14 text-center"
               />
             </div>
+            <div className="flex items-center space-x-2 pt-2">
+              <Switch
+                id="record-expense"
+                checked={recordExpenseOnAddFunds}
+                onCheckedChange={setRecordExpenseOnAddFunds}
+              />
+              <Label htmlFor="record-expense" className="text-xs cursor-pointer">
+                Enregistrer aussi comme dépense du mois (Catégorie « Épargne »)
+              </Label>
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setAddFundsGoalId(null)}>
@@ -1837,7 +1945,7 @@ export default function Home() {
             <Button
               onClick={() => {
                 if (!addFundsGoalId || !addFundsAmount) return
-                addFundsToGoal(addFundsGoalId, parseFloat(addFundsAmount))
+                addFundsToGoal(addFundsGoalId, parseFloat(addFundsAmount), recordExpenseOnAddFunds)
                 setAddFundsAmount("")
                 setAddFundsGoalId(null)
               }}
@@ -2148,7 +2256,7 @@ export default function Home() {
                   variant="ghost"
                   size="icon"
                   className="h-8 w-8 text-rose-500 hover:text-rose-600"
-                  onClick={() => deleteCategory(cat.id)}
+                  onClick={() => cat.id && deleteCategory(cat.id)}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
